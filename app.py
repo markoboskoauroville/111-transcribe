@@ -190,13 +190,17 @@ function startRec() {
   chunks = [];
   document.getElementById('downloadWrap').style.dis = 'none';
 
-  // Prefer wav-compatible format
-  const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
-    ? 'audio/webm;codecs=opus'
-    : MediaRecorder.isTypeSupported('audio/ogg;codecs=opus')
-    ? 'audio/ogg;codecs=opus'
-    : 'audio/webm';
-
+  // Prioritet: mp4/aac (Android), zatim ogg, zatim webm
+  const formats = [
+    'audio/mp4;codecs=aac',
+    'audio/mp4',
+    'audio/aac',
+    'audio/ogg;codecs=opus',
+    'audio/webm;codecs=opus',
+    'audio/webm',
+  ];
+  const mimeType = formats.find(f => MediaRecorder.isTypeSupported(f)) || '';
+  
   mediaRecorder = new MediaRecorder(stream, { mimeType });
   mediaRecorder.ondataavailable = e => { if(e.data.size>0) chunks.push(e.data); };
   mediaRecorder.onstop = buildDownload;
@@ -247,8 +251,11 @@ function buildDownload() {
   recCount++;
   const blob = new Blob(chunks, { type: mediaRecorder.mimeType });
   const url  = URL.createObjectURL(blob);
-  const ext  = mediaRecorder.mimeType.includes('ogg') ? 'ogg' : 'webm';
-  const name = 'snimka_' + pad(recCount) + '.' + ext;
+  
+  const mt   = mediaRecorder.mimeType || '';
+  const ext  = mt.includes('mp4') || mt.includes('aac') ? 'm4a'
+             : mt.includes('ogg') ? 'ogg'
+             : 'webm';  const name = 'snimka_' + pad(recCount) + '.' + ext;
 
   document.getElementById('audioer').src = url;
   const dlBtn = document.getElementById('downloadBtn');
