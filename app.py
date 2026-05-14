@@ -2,7 +2,7 @@ import streamlit as st
 import requests
 import time
 import os
-from mic_recorder import mic_recorder
+from streamlit_mic_recorder import mic_recorder
 
 # ── API key ───────────────────────────────────────────────────────────────────
 API_KEY = st.secrets["ASSEMBLYAI_API_KEY"]
