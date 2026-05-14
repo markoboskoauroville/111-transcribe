@@ -13,7 +13,7 @@ st.markdown('<div style="position:fixed;top:8px;left:12px;color:#666;font-size:1
 
 st.markdown("""
 <style>
-  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&dis=swap');
   html, body, [class*="css"] { font-family: 'Inter', sans-serif; background-color: #1a1a1a; color: #e0e0e0; }
   .stApp { background-color: #1a1a1a; }
   h1 { color: #ff6600; font-weight: 700; letter-spacing: 1px; border-bottom: 2px solid #ff6600; padding-bottom: 8px; margin-bottom: 4px; }
@@ -50,20 +50,20 @@ input_mode = st.radio("IZVOR ZVUKA", ["📁 Upload datoteke", "🎤 Snimi + spre
 RECORDER_HTML = """
 <div style="background:#111;border:1px solid #2a2a2a;border-radius:8px;padding:16px;margin-bottom:8px;">
 
-  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+  <div style="dis:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
     <span style="color:#ff6600;font-size:11px;letter-spacing:3px;font-family:monospace;">AUDIO MONITOR</span>
     <span id="timer" style="color:#ff6600;font-size:24px;font-weight:700;font-family:monospace;letter-spacing:3px;">00:00</span>
     <span id="recDot" style="color:#444;font-size:11px;font-family:monospace;letter-spacing:1px;">● STANDBY</span>
   </div>
 
   <canvas id="waveCanvas" height="60"
-    style="width:100%;height:60px;background:#0a0a0a;border-radius:4px;display:block;margin-bottom:10px;"></canvas>
+    style="width:100%;height:60px;background:#0a0a0a;border-radius:4px;dis:block;margin-bottom:10px;"></canvas>
 
-  <div style="display:flex;gap:10px;margin-bottom:12px;">
+  <div style="dis:flex;gap:10px;margin-bottom:12px;">
     <button id="btnStart" onclick="startRec()"
       style="flex:1;background:#ff6600;color:#000;border:none;border-radius:4px;
              padding:12px;font-weight:700;font-size:13px;letter-spacing:1px;cursor:pointer;">
-      ▶ START
+      ▶ REC
     </button>
     <button id="btnStop" onclick="stopRec()" disabled
       style="flex:1;background:#333;color:#666;border:1px solid #444;border-radius:4px;
@@ -83,11 +83,11 @@ RECORDER_HTML = """
     initializing microphone...
   </div>
 
-  <div id="downloadWrap" style="display:none;">
-    <audio id="audioPlayer" controls
+  <div id="downloadWrap" style="dis:none;">
+    <audio id="audioer" controls
       style="width:100%;margin-bottom:10px;filter:invert(0.8) hue-rotate(180deg);"></audio>
     <a id="downloadBtn"
-      style="display:block;background:#ff6600;color:#000;text-align:center;padding:12px;
+      style="dis:block;background:#ff6600;color:#000;text-align:center;padding:12px;
              border-radius:4px;font-weight:700;font-size:13px;letter-spacing:1px;
              text-decoration:none;cursor:pointer;">
       ⬇ SPREMI NA DISK (.wav)
@@ -188,7 +188,7 @@ async function initMic() {
 function startRec() {
   if (!stream) { statusEl.textContent='Nema mikrofona!'; return; }
   chunks = [];
-  document.getElementById('downloadWrap').style.display = 'none';
+  document.getElementById('downloadWrap').style.dis = 'none';
 
   // Prefer wav-compatible format
   const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
@@ -250,12 +250,12 @@ function buildDownload() {
   const ext  = mediaRecorder.mimeType.includes('ogg') ? 'ogg' : 'webm';
   const name = 'snimka_' + pad(recCount) + '.' + ext;
 
-  document.getElementById('audioPlayer').src = url;
+  document.getElementById('audioer').src = url;
   const dlBtn = document.getElementById('downloadBtn');
   dlBtn.href     = url;
   dlBtn.download = name;
   dlBtn.textContent = '⬇ SPREMI NA DISK (' + name + ')';
-  document.getElementById('downloadWrap').style.display = 'block';
+  document.getElementById('downloadWrap').style.dis = 'block';
 }
 
 drawLoop();
