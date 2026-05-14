@@ -8,9 +8,9 @@ from streamlit_mic_recorder import mic_recorder
 API_KEY = st.secrets["ASSEMBLYAI_API_KEY"]
 HEADERS = {"authorization": API_KEY}
 
-# ── Dizajn ────────────────────────────────────────────────────────────────────
-st.set_page_config(page_title="Marko Transcribe v1.2", page_icon="🎙️", layout="centered")
-st.markdown('<div style="position:fixed;top:8px;left:12px;color:#666;font-size:12px;z-index:9999;font-family:monospace;">v1.1</div>', unsafe_allow_html=True)
+# ── Page config ───────────────────────────────────────────────────────────────
+st.set_page_config(page_title="Marko Transcribe audio", page_icon="🎙️", layout="centered")
+st.markdown('<div style="position:fixed;top:8px;left:12px;color:#666;font-size:12px;z-index:9999;font-family:monospace;">v1.3</div>', unsafe_allow_html=True)
 
 st.markdown("""
 <style>
@@ -34,13 +34,7 @@ st.markdown("<h1>🎙️ MARKO TRANSCRIBE</h1>", unsafe_allow_html=True)
 st.markdown('<div class="subtitle">Personal Transcription Tool</div>', unsafe_allow_html=True)
 
 # ── Jezik ─────────────────────────────────────────────────────────────────────
-LANGUAGE_MAP = {
-    "Hrvatski": "hr",
-    "English":  "en",
-    "Italiano": "it",
-    "Deutsch":  "de",
-    "Français": "fr",
-}
+LANGUAGE_MAP = {"Hrvatski": "hr", "English": "en", "Italiano": "it", "Deutsch": "de", "Français": "fr"}
 lang_label = st.radio("JEZIK / LANGUAGE", list(LANGUAGE_MAP.keys()), horizontal=True)
 lang_code  = LANGUAGE_MAP[lang_label]
 
@@ -53,7 +47,182 @@ st.markdown("---")
 # ── Input mode ────────────────────────────────────────────────────────────────
 input_mode = st.radio("IZVOR ZVUKA", ["📁 Upload datoteke", "🎤 Snimi kroz browser"], horizontal=True)
 
-# ── Timecode helper ───────────────────────────────────────────────────────────
+# ── Waveform + Timer monitor (vizualni, koristi vlastiti mic pristup za display) ──
+MONITOR_HTML = """
+<div style="background:#111;border:1px solid #2a2a2a;border-radius:8px;padding:14px;margin-bottom:4px;">
+
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+    <span style="color:#ff6600;font-size:11px;letter-spacing:3px;font-family:monospace;">AUDIO MONITOR</span>
+    <span id="timer" style="color:#ff6600;font-size:22px;font-weight:700;font-family:monospace;letter-spacing:2px;">00:00</span>
+    <span id="recDot" style="color:#333;font-size:11px;font-family:monospace;">● STANDBY</span>
+  </div>
+
+  <canvas id="waveCanvas" width="800" height="70"
+    style="width:100%;height:70px;background:#0a0a0a;border-radius:4px;display:block;"></canvas>
+
+  <div style="display:flex;justify-content:space-between;margin-top:8px;font-family:monospace;font-size:11px;">
+    <span id="levelBar" style="color:#444;letter-spacing:1px;">▯▯▯▯▯▯▯▯▯▯▯▯▯▯▯▯▯▯▯▯</span>
+    <span id="statusMsg" style="color:#555;">initializing mic...</span>
+  </div>
+
+</div>
+
+<script>
+const canvas  = document.getElementById('waveCanvas');
+const ctx     = canvas.getContext('2d');
+const timerEl = document.getElementById('timer');
+const recDot  = document.getElementById('recDot');
+const levelEl = document.getElementById('levelBar');
+const statusEl= document.getElementById('statusMsg');
+
+let analyser, dataArray;
+let timerInterval = null;
+let seconds = 0;
+let isRecording = false;
+let lastLevel = 0;
+
+function pad(n){ return String(n).padStart(2,'0'); }
+function formatTime(s){ return pad(Math.floor(s/60)) + ':' + pad(s%60); }
+
+// ── Waveform draw loop ────────────────────────────────────────────────────────
+function drawLoop() {
+  requestAnimationFrame(drawLoop);
+  if (!analyser) { drawFlat(); return; }
+
+  analyser.getByteTimeDomainData(dataArray);
+  canvas.width = canvas.offsetWidth * (window.devicePixelRatio || 1);
+  canvas.height = 70 * (window.devicePixelRatio || 1);
+  canvas.style.height = '70px';
+
+  ctx.fillStyle = '#0a0a0a';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  // Centre line
+  ctx.strokeStyle = '#1a1a1a';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(0, canvas.height/2);
+  ctx.lineTo(canvas.width, canvas.height/2);
+  ctx.stroke();
+
+  // Waveform
+  const color = isRecording ? '#ff6600' : '#444';
+  ctx.lineWidth = isRecording ? 2 : 1;
+  ctx.strokeStyle = color;
+  ctx.shadowBlur  = isRecording ? 10 : 0;
+  ctx.shadowColor = '#ff6600';
+  ctx.beginPath();
+  const sw = canvas.width / dataArray.length;
+  for (let i = 0; i < dataArray.length; i++) {
+    const v = dataArray[i] / 128.0;
+    const y = (v * canvas.height) / 2;
+    i === 0 ? ctx.moveTo(0, y) : ctx.lineTo(i * sw, y);
+  }
+  ctx.stroke();
+  ctx.shadowBlur = 0;
+
+  // Level meter
+  let sum = 0;
+  for (let i = 0; i < dataArray.length; i++) sum += Math.abs(dataArray[i] - 128);
+  const level = sum / dataArray.length;
+  lastLevel = level;
+  const bars = Math.min(20, Math.round(level * 20 / 25));
+  const filled = isRecording ? '▮' : '▪';
+  levelEl.style.color = isRecording ? '#ff6600' : '#444';
+  levelEl.textContent = filled.repeat(bars) + '▯'.repeat(20 - bars);
+  statusEl.textContent = isRecording
+    ? `level: ${Math.round(level)} dB`
+    : (analyser ? 'mic ready — click START below' : 'no mic');
+}
+
+function drawFlat() {
+  canvas.width  = canvas.offsetWidth;
+  canvas.height = 70;
+  ctx.fillStyle = '#0a0a0a';
+  ctx.fillRect(0,0,canvas.width,canvas.height);
+  ctx.strokeStyle = '#222';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(0, 35); ctx.lineTo(canvas.width, 35);
+  ctx.stroke();
+}
+
+// ── Timer control via postMessage from parent (not needed — we detect via DOM) ─
+// We detect recording state by watching level changes after user clicks START
+let watchInterval = null;
+let levelHistory  = [];
+
+function watchRecordingState() {
+  // Heuristic: if level spikes after being flat, recording started
+  // We listen for postMessage from streamlit_mic_recorder iframe
+}
+
+// Listen for any postMessage signals
+window.addEventListener('message', function(e) {
+  if (e.data && e.data.type === 'rec_start') startTimer();
+  if (e.data && e.data.type === 'rec_stop')  stopTimer();
+});
+
+function startTimer() {
+  if (timerInterval) return;
+  seconds = 0;
+  isRecording = true;
+  recDot.textContent  = '● REC';
+  recDot.style.color  = '#ff4444';
+  timerEl.style.color = '#ff4444';
+  timerInterval = setInterval(() => {
+    seconds++;
+    timerEl.textContent = formatTime(seconds);
+  }, 1000);
+}
+
+function stopTimer() {
+  clearInterval(timerInterval);
+  timerInterval = null;
+  isRecording   = false;
+  recDot.textContent  = '■ STOPPED';
+  recDot.style.color  = '#44cc88';
+  timerEl.style.color = '#44cc88';
+  statusEl.textContent = 'recording done — click POKRETANJE TRANSKRIPCIJE';
+  statusEl.style.color = '#44cc88';
+}
+
+// ── Init microphone ───────────────────────────────────────────────────────────
+async function initMic() {
+  try {
+    const stream  = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+    const audioCtx= new (window.AudioContext || window.webkitAudioContext)();
+    const source  = audioCtx.createMediaStreamSource(stream);
+    analyser      = audioCtx.createAnalyser();
+    analyser.fftSize = 1024;
+    dataArray     = new Uint8Array(analyser.frequencyBinCount);
+    source.connect(analyser);
+    statusEl.textContent = 'mic connected — click START below';
+    statusEl.style.color = '#ff6600';
+
+    // Auto-detect recording start: watch for sustained level > threshold
+    let highCount = 0;
+    let lowCount  = 0;
+    setInterval(() => {
+      if (lastLevel > 3) { highCount++; lowCount = 0; }
+      else               { lowCount++;  highCount = 0; }
+      if (highCount === 3  && !isRecording) startTimer();
+      if (lowCount  === 8  &&  isRecording) stopTimer();
+    }, 200);
+
+  } catch(e) {
+    statusEl.textContent = 'mic denied: ' + e.message;
+    statusEl.style.color = '#ff4444';
+    drawFlat();
+  }
+}
+
+drawLoop();
+window.addEventListener('load', initMic);
+</script>
+"""
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
 def ms_to_tc(ms):
     total_s = ms // 1000
     h  = total_s // 3600
@@ -62,22 +231,49 @@ def ms_to_tc(ms):
     cs = (ms % 1000) // 10
     return f"{h:02d}:{m:02d}:{s:02d}.{cs:02d}"
 
-# ── Transkripcija — identična server-side metoda za oba izvora ────────────────
+def upload_with_progress(audio_bytes):
+    """Chunked server-side upload s progress barom i speed indikatorom."""
+    CHUNK = 32768  # 32 KB
+    total = len(audio_bytes)
+    uploaded = 0
+    start_time = time.time()
+
+    pbar  = st.progress(0.0, text="📤 Uploading...")
+    speed = st.empty()
+
+    def data_gen():
+        nonlocal uploaded
+        for i in range(0, total, CHUNK):
+            chunk     = audio_bytes[i:i + CHUNK]
+            uploaded += len(chunk)
+            elapsed   = max(time.time() - start_time, 0.001)
+            kb_s      = (uploaded / elapsed) / 1024
+            pct       = uploaded / total
+            pbar.progress(pct, text=f"📤  {uploaded // 1024} KB / {total // 1024} KB")
+            speed.markdown(
+                f"<span style='font-family:monospace;color:#ff6600;font-size:12px;'>"
+                f"⚡ {kb_s:.0f} KB/s</span>",
+                unsafe_allow_html=True
+            )
+            yield chunk
+
+    resp = requests.post(
+        "https://api.assemblyai.com/v2/upload",
+        headers={**HEADERS, "content-type": "application/octet-stream"},
+        data=data_gen()
+    )
+    pbar.progress(1.0, text="✓ Upload complete!")
+    speed.empty()
+    time.sleep(0.4)
+    pbar.empty()
+    resp.raise_for_status()
+    return resp.json()["upload_url"]
+
 def transcribe(audio_bytes, filename="audio"):
-    # KORAK 1 — Upload (server-side, identično za file i mikrofon)
-    with st.spinner("📤 Uploading audio..."):
-        upload_response = requests.post(
-            "https://api.assemblyai.com/v2/upload",
-            headers={**HEADERS, "content-type": "application/octet-stream"},
-            data=audio_bytes
-        )
-        upload_response.raise_for_status()
-        upload_url = upload_response.json()["upload_url"]
+    upload_url = upload_with_progress(audio_bytes)
+    st.info("✓ Uploadano. Pokrećem transkripciju...")
 
-    st.info("✓ Audio uploadano. Pokrećem transkripciju...")
-
-    # KORAK 2 — Zahtjev
-    transcript_response = requests.post(
+    tr = requests.post(
         "https://api.assemblyai.com/v2/transcript",
         headers={**HEADERS, "content-type": "application/json"},
         json={
@@ -88,48 +284,39 @@ def transcribe(audio_bytes, filename="audio"):
             "format_text":   True,
         }
     )
-    transcript_response.raise_for_status()
-    transcript_id = transcript_response.json()["id"]
+    tr.raise_for_status()
+    tid = tr.json()["id"]
 
-    # KORAK 3 — Polling
-    polling_url = f"https://api.assemblyai.com/v2/transcript/{transcript_id}"
-    status_placeholder = st.empty()
+    poll_url = f"https://api.assemblyai.com/v2/transcript/{tid}"
+    ph = st.empty()
     attempts = 0
-
     while True:
         time.sleep(3)
-        poll = requests.get(polling_url, headers=HEADERS).json()
+        poll = requests.get(poll_url, headers=HEADERS).json()
         attempts += 1
-        status_placeholder.info(f"⏳ Transkripcija u tijeku... ({attempts * 3}s)")
-
+        ph.info(f"⏳ Transkripcija u tijeku... ({attempts * 3}s)")
         if poll.get("status") == "completed":
-            status_placeholder.empty()
-            break
+            ph.empty(); break
         elif poll.get("status") == "error":
-            st.error(f"Greška: {poll.get('error')}")
-            st.stop()
+            st.error(f"Greška: {poll.get('error')}"); st.stop()
         elif attempts > 120:
-            st.error("Timeout.")
-            st.stop()
+            st.error("Timeout."); st.stop()
 
-    # KORAK 4 — Gradi output
     if include_timecode and poll.get("words"):
         words = poll["words"]
-        lines, current_words = [], []
-        current_start = words[0]["start"]
-        for i, word in enumerate(words):
-            current_words.append(word["text"])
-            if len(current_words) >= 10 or i == len(words) - 1:
-                lines.append(f"[{ms_to_tc(current_start)}]  {' '.join(current_words)}")
-                current_words = []
+        lines, cur, cur_start = [], [], words[0]["start"]
+        for i, w in enumerate(words):
+            cur.append(w["text"])
+            if len(cur) >= 10 or i == len(words) - 1:
+                lines.append(f"[{ms_to_tc(cur_start)}]  {' '.join(cur)}")
+                cur = []
                 if i < len(words) - 1:
-                    current_start = words[i + 1]["start"]
+                    cur_start = words[i + 1]["start"]
         return "\n\n".join(lines)
-    else:
-        return poll.get("text", "")
+    return poll.get("text", "")
 
 # ── UI ────────────────────────────────────────────────────────────────────────
-output_text       = None
+output_text = None
 download_filename = None
 
 if input_mode == "📁 Upload datoteke":
@@ -137,7 +324,7 @@ if input_mode == "📁 Upload datoteke":
         "Učitaj audio datoteku",
         type=["mp3", "mp4", "wav", "m4a", "aac", "ogg", "flac", "mov", "mxf"],
     )
-    if uploaded_file is not None:
+    if uploaded_file:
         st.markdown(
             f'<div class="status-box">📂 <strong>{uploaded_file.name}</strong> — {lang_label}</div>',
             unsafe_allow_html=True
@@ -146,20 +333,24 @@ if input_mode == "📁 Upload datoteke":
             try:
                 output_text = transcribe(uploaded_file.read(), uploaded_file.name)
                 base = os.path.splitext(uploaded_file.name)[0]
-                tc_suffix = "_timecode" if include_timecode else ""
-                download_filename = f"{base}_{lang_code}{tc_suffix}.txt"
+                tc_s = "_timecode" if include_timecode else ""
+                download_filename = f"{base}_{lang_code}{tc_s}.txt"
             except requests.exceptions.HTTPError as e:
                 st.error(f"HTTP greška: {e.response.status_code} — {e.response.text}")
             except Exception as e:
                 st.error(f"Greška: {str(e)}")
 
 else:
+    # Waveform + timer monitor
+    st.components.v1.html(MONITOR_HTML, height=145)
+
     st.markdown(
-        '<div class="status-box">🎤 Pritisni START, snimi, pritisni STOP — audio se šalje server-side identično kao file upload</div>',
+        '<div class="status-box">🎤 Klikni <strong>START SNIMANJE</strong> ispod — '
+        'monitor automatski detektira audio signal. '
+        'Nakon snimanja klikni <strong>POKRETANJE TRANSKRIPCIJE</strong>.</div>',
         unsafe_allow_html=True
     )
 
-    # mic_recorder vraća bytes direktno Pythonu — nema direktnog browser→API poziva
     audio = mic_recorder(
         start_prompt="▶  START SNIMANJE",
         stop_prompt="■  STOP SNIMANJE",
@@ -169,12 +360,13 @@ else:
     )
 
     if audio and audio.get("bytes"):
-        st.success(f"✓ Snimka primljena — {len(audio['bytes']) // 1024} KB")
+        size_kb = len(audio["bytes"]) // 1024
+        st.success(f"✓ Snimka primljena — {size_kb} KB — spreman za transkripciju")
         if st.button("▶  POKRETANJE TRANSKRIPCIJE"):
             try:
                 output_text = transcribe(audio["bytes"], "mikrofon_snimka")
-                tc_suffix = "_timecode" if include_timecode else ""
-                download_filename = f"mikrofon_{lang_code}{tc_suffix}.txt"
+                tc_s = "_timecode" if include_timecode else ""
+                download_filename = f"mikrofon_{lang_code}{tc_s}.txt"
             except requests.exceptions.HTTPError as e:
                 st.error(f"HTTP greška: {e.response.status_code} — {e.response.text}")
             except Exception as e:
