@@ -9,7 +9,7 @@ API_KEY = st.secrets["ASSEMBLYAI_API_KEY"]
 HEADERS = {"authorization": API_KEY}
 
 # ── Dizajn ────────────────────────────────────────────────────────────────────
-st.set_page_config(page_title="Marko Transcribe v1.1", page_icon="🎙️", layout="centered")
+st.set_page_config(page_title="Marko Transcribe v1.2", page_icon="🎙️", layout="centered")
 st.markdown('<div style="position:fixed;top:8px;left:12px;color:#666;font-size:12px;z-index:9999;font-family:monospace;">v1.1</div>', unsafe_allow_html=True)
 
 st.markdown("""
