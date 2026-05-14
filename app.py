@@ -2,15 +2,15 @@ import streamlit as st
 import requests
 import time
 import os
-import base64
+from mic_recorder import mic_recorder
 
 # ── API key ───────────────────────────────────────────────────────────────────
 API_KEY = st.secrets["ASSEMBLYAI_API_KEY"]
 HEADERS = {"authorization": API_KEY}
 
 # ── Dizajn ────────────────────────────────────────────────────────────────────
-st.set_page_config(page_title="Marko Transcribe", page_icon="🎙️", layout="centered")
-st.markdown('<div style="position:fixed;top:8px;left:12px;color:#666;font-size:12px;z-index:9999;font-family:monospace;">v1.0</div>', unsafe_allow_html=True)
+st.set_page_config(page_title="Marko Transcribe v1.1", page_icon="🎙️", layout="centered")
+st.markdown('<div style="position:fixed;top:8px;left:12px;color:#666;font-size:12px;z-index:9999;font-family:monospace;">v1.1</div>', unsafe_allow_html=True)
 
 st.markdown("""
 <style>
@@ -53,83 +53,6 @@ st.markdown("---")
 # ── Input mode ────────────────────────────────────────────────────────────────
 input_mode = st.radio("IZVOR ZVUKA", ["📁 Upload datoteke", "🎤 Snimi kroz browser"], horizontal=True)
 
-# ── Browser mikrofon snimanje ─────────────────────────────────────────────────
-RECORDER_HTML = """
-<div style="background:#222;border:1px solid #444;border-radius:8px;padding:20px;margin:12px 0;">
-  <div id="status" style="color:#888;font-size:13px;margin-bottom:12px;font-family:monospace;">
-    ● Pritisni START za snimanje
-  </div>
-  <button onclick="startRec()" id="btnStart"
-    style="background:#ff6600;color:#000;border:none;border-radius:4px;padding:10px 24px;
-           font-weight:700;letter-spacing:1px;cursor:pointer;margin-right:10px;">
-    ▶ START
-  </button>
-  <button onclick="stopRec()" id="btnStop" disabled
-    style="background:#333;color:#888;border:1px solid #555;border-radius:4px;padding:10px 24px;
-           font-weight:700;letter-spacing:1px;cursor:not-allowed;">
-    ■ STOP
-  </button>
-
-  <div id="audioWrap" style="margin-top:16px;display:none;">
-    <audio id="audioPlayer" controls style="width:100%;margin-bottom:10px;"></audio>
-    <button onclick="sendAudio()"
-      style="background:#ff6600;color:#000;border:none;border-radius:4px;padding:10px 24px;
-             font-weight:700;letter-spacing:1px;cursor:pointer;width:100%;">
-      ⬆ POŠALJI NA TRANSKRIPCIJU
-    </button>
-  </div>
-  <div id="result" style="margin-top:12px;color:#aaa;font-size:13px;font-family:monospace;"></div>
-</div>
-
-<script>
-let mediaRecorder, chunks = [], audioBlob;
-
-async function startRec() {
-  chunks = [];
-  const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-  mediaRecorder = new MediaRecorder(stream);
-  mediaRecorder.ondataavailable = e => chunks.push(e.data);
-  mediaRecorder.onstop = () => {
-    audioBlob = new Blob(chunks, { type: 'audio/webm' });
-    const url = URL.createObjectURL(audioBlob);
-    document.getElementById('audioPlayer').src = url;
-    document.getElementById('audioWrap').style.display = 'block';
-    document.getElementById('status').innerHTML = '✓ Snimanje završeno — preslušaj ili pošalji';
-    document.getElementById('status').style.color = '#ff6600';
-  };
-  mediaRecorder.start();
-  document.getElementById('status').innerHTML = '🔴 Snimanje u tijeku...';
-  document.getElementById('status').style.color = '#ff4444';
-  document.getElementById('btnStart').disabled = true;
-  document.getElementById('btnStart').style.background = '#555';
-  document.getElementById('btnStop').disabled = false;
-  document.getElementById('btnStop').style.background = '#ff4444';
-  document.getElementById('btnStop').style.color = '#fff';
-  document.getElementById('btnStop').style.cursor = 'pointer';
-}
-
-function stopRec() {
-  mediaRecorder.stop();
-  mediaRecorder.stream.getTracks().forEach(t => t.stop());
-  document.getElementById('btnStart').disabled = false;
-  document.getElementById('btnStart').style.background = '#ff6600';
-  document.getElementById('btnStop').disabled = true;
-  document.getElementById('btnStop').style.background = '#333';
-  document.getElementById('btnStop').style.color = '#888';
-}
-
-async function sendAudio() {
-  document.getElementById('result').textContent = '📤 Šaljem na Streamlit...';
-  const reader = new FileReader();
-  reader.onload = function(e) {
-    const b64 = e.target.result.split(',')[1];
-    window.parent.postMessage({ type: 'streamlit:setComponentValue', value: b64 }, '*');
-  };
-  reader.readAsDataURL(audioBlob);
-}
-</script>
-"""
-
 # ── Timecode helper ───────────────────────────────────────────────────────────
 def ms_to_tc(ms):
     total_s = ms // 1000
@@ -139,8 +62,9 @@ def ms_to_tc(ms):
     cs = (ms % 1000) // 10
     return f"{h:02d}:{m:02d}:{s:02d}.{cs:02d}"
 
-# ── Transkripcija (zajednička funkcija) ───────────────────────────────────────
-def transcribe(audio_bytes, filename="recording.webm"):
+# ── Transkripcija — identična server-side metoda za oba izvora ────────────────
+def transcribe(audio_bytes, filename="audio"):
+    # KORAK 1 — Upload (server-side, identično za file i mikrofon)
     with st.spinner("📤 Uploading audio..."):
         upload_response = requests.post(
             "https://api.assemblyai.com/v2/upload",
@@ -152,6 +76,7 @@ def transcribe(audio_bytes, filename="recording.webm"):
 
     st.info("✓ Audio uploadano. Pokrećem transkripciju...")
 
+    # KORAK 2 — Zahtjev
     transcript_response = requests.post(
         "https://api.assemblyai.com/v2/transcript",
         headers={**HEADERS, "content-type": "application/json"},
@@ -166,6 +91,7 @@ def transcribe(audio_bytes, filename="recording.webm"):
     transcript_response.raise_for_status()
     transcript_id = transcript_response.json()["id"]
 
+    # KORAK 3 — Polling
     polling_url = f"https://api.assemblyai.com/v2/transcript/{transcript_id}"
     status_placeholder = st.empty()
     attempts = 0
@@ -186,6 +112,7 @@ def transcribe(audio_bytes, filename="recording.webm"):
             st.error("Timeout.")
             st.stop()
 
+    # KORAK 4 — Gradi output
     if include_timecode and poll.get("words"):
         words = poll["words"]
         lines, current_words = [], []
@@ -197,12 +124,12 @@ def transcribe(audio_bytes, filename="recording.webm"):
                 current_words = []
                 if i < len(words) - 1:
                     current_start = words[i + 1]["start"]
-        return "\n\n".join(lines), filename
+        return "\n\n".join(lines)
     else:
-        return poll.get("text", ""), filename
+        return poll.get("text", "")
 
-# ── UI logika ─────────────────────────────────────────────────────────────────
-output_text = None
+# ── UI ────────────────────────────────────────────────────────────────────────
+output_text       = None
 download_filename = None
 
 if input_mode == "📁 Upload datoteke":
@@ -217,8 +144,8 @@ if input_mode == "📁 Upload datoteke":
         )
         if st.button("▶  POKRETANJE TRANSKRIPCIJE"):
             try:
-                output_text, fn = transcribe(uploaded_file.read(), uploaded_file.name)
-                base = os.path.splitext(fn)[0]
+                output_text = transcribe(uploaded_file.read(), uploaded_file.name)
+                base = os.path.splitext(uploaded_file.name)[0]
                 tc_suffix = "_timecode" if include_timecode else ""
                 download_filename = f"{base}_{lang_code}{tc_suffix}.txt"
             except requests.exceptions.HTTPError as e:
@@ -227,24 +154,31 @@ if input_mode == "📁 Upload datoteke":
                 st.error(f"Greška: {str(e)}")
 
 else:
-    st.markdown("**Snimi audio kroz browser:**")
-    st.components.v1.html(RECORDER_HTML, height=260)
-    st.markdown("---")
-    b64_audio = st.text_input(
-        "Nakon snimanja klikni POŠALJI gore, pa zalijepi primljeni kod ovdje:",
-        placeholder="base64 audio kod...",
-        label_visibility="visible"
+    st.markdown(
+        '<div class="status-box">🎤 Pritisni START, snimi, pritisni STOP — audio se šalje server-side identično kao file upload</div>',
+        unsafe_allow_html=True
     )
-    if b64_audio and st.button("▶  TRANSKRIBIRAJ SNIMKU"):
-        try:
-            audio_bytes = base64.b64decode(b64_audio)
-            output_text, _ = transcribe(audio_bytes, "browser_recording.webm")
-            tc_suffix = "_timecode" if include_timecode else ""
-            download_filename = f"browser_recording_{lang_code}{tc_suffix}.txt"
-        except requests.exceptions.HTTPError as e:
-            st.error(f"HTTP greška: {e.response.status_code} — {e.response.text}")
-        except Exception as e:
-            st.error(f"Greška: {str(e)}")
+
+    # mic_recorder vraća bytes direktno Pythonu — nema direktnog browser→API poziva
+    audio = mic_recorder(
+        start_prompt="▶  START SNIMANJE",
+        stop_prompt="■  STOP SNIMANJE",
+        just_once=True,
+        use_container_width=True,
+        key="mic"
+    )
+
+    if audio and audio.get("bytes"):
+        st.success(f"✓ Snimka primljena — {len(audio['bytes']) // 1024} KB")
+        if st.button("▶  POKRETANJE TRANSKRIPCIJE"):
+            try:
+                output_text = transcribe(audio["bytes"], "mikrofon_snimka")
+                tc_suffix = "_timecode" if include_timecode else ""
+                download_filename = f"mikrofon_{lang_code}{tc_suffix}.txt"
+            except requests.exceptions.HTTPError as e:
+                st.error(f"HTTP greška: {e.response.status_code} — {e.response.text}")
+            except Exception as e:
+                st.error(f"Greška: {str(e)}")
 
 # ── Output ────────────────────────────────────────────────────────────────────
 if output_text:
