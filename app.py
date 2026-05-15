@@ -7,7 +7,9 @@ import asyncio
 import base64
 import threading
 import re
-from datetime import datetime
+import ipaddress
+import calendar
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import gspread
@@ -30,6 +32,7 @@ def load_settings():
         "sheet_url":         st.secrets.get("GOOGLE_SHEET_URL", ""),
         "monthly_limit_min": int(st.secrets.get("MONTHLY_LIMIT_MIN", 180)),
         "app_title":         "MARKO TRANSCRIBE",
+        "billing_start":     "2026-05-14",
     }
 
 def save_settings(s):
@@ -99,13 +102,13 @@ def sheet_clear_log():
         pass
 
 # ── IP helpers ────────────────────────────────────────────────────────────────
+def is_private(ip_str):
+    try:
+        return ipaddress.ip_address(ip_str).is_private
+    except:
+        return True
+
 def get_client_ip():
-    import ipaddress
-    def is_private(ip_str):
-        try:
-            return ipaddress.ip_address(ip_str).is_private
-        except:
-            return True
     try:
         fwd = st.context.headers.get("X-Forwarded-For", "")
         if fwd:
@@ -115,14 +118,13 @@ def get_client_ip():
         real = st.context.headers.get("X-Real-IP", "")
         if real and not is_private(real):
             return real
-        # Fallback — pitaj vanjski servis
         r = requests.get("https://api.ipify.org?format=json", timeout=4)
         return r.json().get("ip", "unknown")
     except:
         return "unknown"
 
 def get_ip_info(ip):
-    if ip in ("unknown","127.0.0.1",""):
+    if ip in ("unknown", "127.0.0.1", ""):
         return {"city":"Local","country":"","org":"localhost","isp":""}
     try:
         r = requests.get(
@@ -153,11 +155,29 @@ def format_duration(sec):
         return "0:00"
     return f"{sec//60}:{sec%60:02d}"
 
+def get_billing_window(billing_start_str):
+    try:
+        start = datetime.strptime(billing_start_str, "%Y-%m-%d")
+    except:
+        start = datetime.now().replace(day=1)
+    now = datetime.now()
+    period_start = start
+    while True:
+        month = period_start.month + 1
+        year  = period_start.year
+        if month > 12:
+            month = 1
+            year += 1
+        day        = min(start.day, calendar.monthrange(year, month)[1])
+        period_end = period_start.replace(year=year, month=month, day=day)
+        if now < period_end:
+            break
+        period_start = period_end
+    return period_start, period_end
+
 # ════════════════════════════════════════════════════════════════════════════
 # EDGE TTS
 # ════════════════════════════════════════════════════════════════════════════
-
-# Best voices per language + gender
 VOICE_MAP = {
     "Hrvatski": {"🚺 Female": "hr-HR-GabrijelaNeural", "🚹 Male": "hr-HR-SreckoNeural"},
     "English":  {"🚺 Female": "en-US-AriaNeural",       "🚹 Male": "en-US-GuyNeural"},
@@ -168,8 +188,8 @@ VOICE_MAP = {
 
 async def _tts_async(text: str, voice: str):
     import edge_tts
-    communicate    = edge_tts.Communicate(text, voice)
-    audio_chunks   = []
+    communicate     = edge_tts.Communicate(text, voice)
+    audio_chunks    = []
     word_boundaries = []
     async for chunk in communicate.stream():
         if chunk["type"] == "audio":
@@ -192,9 +212,9 @@ def generate_tts(text: str, voice: str):
     return result["value"]
 
 def build_tts_player(text: str, audio_b64: str, word_boundaries: list) -> str:
-    tokens    = re.split(r"(\s+)", text)
-    word_idx  = 0
-    spans     = ""
+    tokens   = re.split(r"(\s+)", text)
+    word_idx = 0
+    spans    = ""
     for tok in tokens:
         if not tok:
             continue
@@ -203,20 +223,15 @@ def build_tts_player(text: str, audio_b64: str, word_boundaries: list) -> str:
         else:
             spans    += f'<span class="w" data-wi="{word_idx}">{tok}</span>'
             word_idx += 1
-
     wb_json     = json.dumps(word_boundaries)
     total_words = word_idx
-
     return f"""<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8">
 <style>
   *{{box-sizing:border-box;margin:0;padding:0;}}
   body{{background:#111;color:#e0e0e0;font-family:'Inter',sans-serif;padding:0;}}
-  #reader{{
-    background:#1a1a1a;border:1px solid #2a2a2a;border-radius:10px;
-    padding:20px 24px;font-size:17px;line-height:2.1;
-    max-height:280px;overflow-y:auto;margin-bottom:14px;
-    color:#ccc;scroll-behavior:smooth;
-  }}
+  #reader{{background:#1a1a1a;border:1px solid #2a2a2a;border-radius:10px;
+    padding:20px 24px;font-size:17px;line-height:2.1;max-height:280px;
+    overflow-y:auto;margin-bottom:14px;color:#ccc;scroll-behavior:smooth;}}
   #reader::-webkit-scrollbar{{width:3px;}}
   #reader::-webkit-scrollbar-thumb{{background:#333;border-radius:3px;}}
   .w{{display:inline;border-radius:3px;padding:1px 2px;margin:0 -1px;
@@ -226,14 +241,14 @@ def build_tts_player(text: str, audio_b64: str, word_boundaries: list) -> str:
   #wp-wrap{{height:4px;background:#1e1e1e;border-radius:2px;margin-bottom:12px;overflow:hidden;}}
   #wp-fill{{height:100%;background:linear-gradient(90deg,#ff6600,#ffaa00);width:0%;border-radius:2px;transition:width .1s;}}
   #controls{{display:flex;align-items:center;gap:8px;flex-wrap:wrap;}}
-  .btn{{display:inline-flex;align-items:center;gap:5px;padding:8px 16px;
-        border:none;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;transition:all .15s;}}
+  .btn{{display:inline-flex;align-items:center;gap:5px;padding:8px 16px;border:none;
+        border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;transition:all .15s;}}
   #play-btn{{background:#ff6600;color:#000;min-width:100px;justify-content:center;}}
   #play-btn:hover{{background:#ff8833;}}
   #stop-btn{{background:#222;color:#888;border:1px solid #333;}}
   #stop-btn:hover{{background:#2a2a2a;color:#bbb;}}
-  #seek{{flex:1;min-width:100px;-webkit-appearance:none;appearance:none;
-         height:4px;background:#222;border-radius:4px;outline:none;cursor:pointer;}}
+  #seek{{flex:1;min-width:100px;-webkit-appearance:none;appearance:none;height:4px;
+         background:#222;border-radius:4px;outline:none;cursor:pointer;}}
   #seek::-webkit-slider-thumb{{-webkit-appearance:none;width:13px;height:13px;
     border-radius:50%;background:#ff6600;cursor:pointer;}}
   #time-lbl{{font-family:monospace;font-size:11px;color:#555;min-width:84px;text-align:right;}}
@@ -242,8 +257,7 @@ def build_tts_player(text: str, audio_b64: str, word_boundaries: list) -> str:
   select{{background:#1a1a1a;color:#aaa;border:1px solid #333;border-radius:6px;
           padding:5px 8px;font-family:monospace;font-size:11px;cursor:pointer;outline:none;}}
   #status{{margin-top:8px;font-size:11px;font-family:monospace;color:#444;text-align:right;}}
-</style>
-</head><body>
+</style></head><body>
 <div id="wp-wrap"><div id="wp-fill"></div></div>
 <div id="reader">{spans}</div>
 <div id="controls">
@@ -307,9 +321,8 @@ function changeSpeed(){{audio.playbackRate=parseFloat(document.getElementById('s
 st.set_page_config(page_title=cfg["app_title"], page_icon="🎙️", layout="centered")
 st.markdown(
     '<div style="position:fixed;top:8px;left:12px;color:#555;font-size:11px;'
-    'z-index:9999;font-family:monospace;">v1.8</div>',
-    unsafe_allow_html=True
-)
+    'z-index:9999;font-family:monospace;">v2.0</div>',
+    unsafe_allow_html=True)
 
 st.markdown("""
 <style>
@@ -346,25 +359,33 @@ if "tts_open" not in st.session_state:
     st.session_state.tts_open = False
 if "tts_input" not in st.session_state:
     st.session_state.tts_input = ""
+if "download_filename" not in st.session_state:
+    st.session_state.download_filename = "transkript.txt"
 
 # ════════════════════════════════════════════════════════════════════════════
 # USAGE BAR
 # ════════════════════════════════════════════════════════════════════════════
-log_entries   = sheet_load() if cfg["sheet_url"] else []
-monthly_sec   = cfg["monthly_limit_min"] * 60
-now           = datetime.now()
-month_prefix  = f"{now.year}-{now.month:02d}"
-used_sec      = sum(int(e.get("duration_sec",0)) for e in log_entries
-                    if str(e.get("date","")).startswith(month_prefix))
+log_entries              = sheet_load() if cfg["sheet_url"] else []
+monthly_sec              = cfg["monthly_limit_min"] * 60
+now                      = datetime.now()
+period_start, period_end = get_billing_window(cfg.get("billing_start","2026-05-14"))
+
+used_sec = sum(
+    int(e.get("duration_sec", 0))
+    for e in log_entries
+    if str(e.get("date","1970-01-01")) >= period_start.strftime("%Y-%m-%d")
+    and str(e.get("date","1970-01-01")) < period_end.strftime("%Y-%m-%d")
+)
 remaining_sec = max(0, monthly_sec - used_sec)
 pct           = min(1.0, used_sec / monthly_sec) if monthly_sec else 0
 bar_color     = "#44cc88" if pct < 0.7 else "#ffaa00" if pct < 0.9 else "#ff4444"
+days_left     = (period_end - now).days
 
 st.markdown(f"""
 <div style="background:#111;border:1px solid #2a2a2a;border-radius:8px;padding:14px;margin-bottom:16px;">
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
     <span style="font-family:monospace;font-size:11px;color:#555;letter-spacing:2px;">
-      ASSEMBLYAI — {now.strftime('%B %Y').upper()}
+      ASSEMBLYAI · {period_start.strftime('%d.%m.')} → {period_end.strftime('%d.%m.%Y')} · još {days_left}d
     </span>
     <span style="font-family:monospace;font-size:14px;color:{bar_color};font-weight:700;">
       ⏱ {remaining_sec//60}:{remaining_sec%60:02d} min preostalo
@@ -381,7 +402,7 @@ st.markdown(f"""
 """, unsafe_allow_html=True)
 
 # ════════════════════════════════════════════════════════════════════════════
-# TRANSCRIPTION SECTION
+# TRANSCRIPTION
 # ════════════════════════════════════════════════════════════════════════════
 LANGUAGE_MAP = {"Hrvatski":"hr","English":"en","Italiano":"it","Deutsch":"de","Français":"fr"}
 lang_label   = st.radio("JEZIK / LANGUAGE", list(LANGUAGE_MAP.keys()), horizontal=True)
@@ -458,7 +479,7 @@ async function initMic(){
     const source=actx.createMediaStreamSource(stream);
     analyser=actx.createAnalyser();analyser.fftSize=2048;
     dataArray=new Uint8Array(analyser.frequencyBinCount);source.connect(analyser);
-    statusEl.textContent='Mikrofon spreman — pritisni START';statusEl.style.color='#ff6600';
+    statusEl.textContent='Mikrofon spreman — pritisni REC';statusEl.style.color='#ff6600';
   }catch(e){statusEl.textContent='Mikrofon nedostupan: '+e.message;statusEl.style.color='#ff4444';}
 }
 function startRec(){
@@ -473,9 +494,12 @@ function startRec(){
   recDot.textContent='● REC';recDot.style.color='#ff4444';
   statusEl.textContent='Snimanje u tijeku...';statusEl.style.color='#ff4444';
   document.getElementById('btnStart').disabled=true;
-  document.getElementById('btnStart').style.cssText+='background:#552200;color:#888;';
+  document.getElementById('btnStart').style.background='#552200';
+  document.getElementById('btnStart').style.color='#888';
   document.getElementById('btnStop').disabled=false;
-  document.getElementById('btnStop').style.cssText+='background:#ff4444;color:#fff;cursor:pointer;';
+  document.getElementById('btnStop').style.background='#ff4444';
+  document.getElementById('btnStop').style.color='#fff';
+  document.getElementById('btnStop').style.cursor='pointer';
   timerInt=setInterval(()=>{seconds++;timerEl.textContent=pad(Math.floor(seconds/60))+':'+pad(seconds%60);},1000);
 }
 function stopRec(){
@@ -484,9 +508,12 @@ function stopRec(){
   recDot.textContent='■ DONE';recDot.style.color='#44cc88';timerEl.style.color='#44cc88';
   statusEl.textContent='Snimanje završeno';statusEl.style.color='#44cc88';
   document.getElementById('btnStart').disabled=false;
-  document.getElementById('btnStart').style.cssText+='background:#ff6600;color:#000;';
+  document.getElementById('btnStart').style.background='#ff6600';
+  document.getElementById('btnStart').style.color='#000';
   document.getElementById('btnStop').disabled=true;
-  document.getElementById('btnStop').style.cssText+='background:#333;color:#666;cursor:not-allowed;';
+  document.getElementById('btnStop').style.background='#333';
+  document.getElementById('btnStop').style.color='#666';
+  document.getElementById('btnStop').style.cursor='not-allowed';
 }
 function buildDownload(){
   recCount++;
@@ -505,7 +532,7 @@ drawLoop();window.addEventListener('load',initMic);
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 def ms_to_tc(ms):
-    total_s=ms//1000
+    total_s = ms // 1000
     return f"{total_s//3600:02d}:{(total_s%3600)//60:02d}:{total_s%60:02d}.{(ms%1000)//10:02d}"
 
 def upload_with_progress(audio_bytes):
@@ -541,7 +568,9 @@ def transcribe(audio_bytes, filename="audio"):
     ph=st.empty(); attempts=0; poll={}
     while True:
         time.sleep(3)
-        poll=requests.get(f"https://api.assemblyai.com/v2/transcript/{tid}",headers=HEADERS).json()
+        poll=requests.get(
+            f"https://api.assemblyai.com/v2/transcript/{tid}",
+            headers=HEADERS).json()
         attempts+=1; ph.info(f"⏳ Transkripcija u tijeku... ({attempts*3}s)")
         if poll.get("status")=="completed": ph.empty(); break
         elif poll.get("status")=="error": st.error(f"Greška: {poll.get('error')}"); st.stop()
@@ -597,14 +626,13 @@ if uploaded_file:
     if st.button("▶  POKRETANJE TRANSKRIPCIJE"):
         try:
             result_text, dur = transcribe(uploaded_file.read(), uploaded_file.name)
-            
             st.session_state.transcript_text = result_text
             st.session_state["tts_input"]    = result_text
             st.session_state.tts_open        = True
-            
             base=os.path.splitext(uploaded_file.name)[0]
             tc_s="_timecode" if include_timecode else ""
             st.session_state.download_filename=f"{base}_{lang_code}{tc_s}.txt"
+            st.rerun()
         except requests.exceptions.HTTPError as e:
             st.error(f"HTTP greška: {e.response.status_code} — {e.response.text}")
         except Exception as e:
@@ -616,42 +644,36 @@ if st.session_state.transcript_text:
     st.download_button(
         label="⬇  PREUZMI TXT DATOTEKU",
         data=st.session_state.transcript_text.encode("utf-8"),
-        file_name=st.session_state.get("download_filename","transkript.txt"),
+        file_name=st.session_state.download_filename,
         mime="text/plain")
 
 # ════════════════════════════════════════════════════════════════════════════
 # TTS READER
 # ════════════════════════════════════════════════════════════════════════════
 st.markdown("---")
-
 with st.expander("🔊  READ TRANSCRIPT — Edge Neural Voice",
                  expanded=st.session_state.tts_open):
 
-    st.markdown(
-        '<div style="font-family:monospace;font-size:11px;color:#555;'
-        'letter-spacing:2px;margin-bottom:12px;">GLAS / VOICE</div>',
-        unsafe_allow_html=True)
+    st.session_state.tts_open = True
 
     gender = st.radio(
         "Spol glasa",
-        ["🚺 Female", "🚹 Male"],
+        ["🚺 Female","🚹 Male"],
         horizontal=True,
-        label_visibility="collapsed"
+        label_visibility="collapsed",
+        key="tts_gender"
     )
-
     selected_voice = VOICE_MAP.get(lang_label, VOICE_MAP["English"])[gender]
-
     st.markdown(
-        f'<div style="font-family:monospace;font-size:10px;color:#444;'
-        f'margin-bottom:12px;">voice: {selected_voice} &nbsp;|&nbsp; '
-        f'jezik: {lang_label}</div>',
+        f'<div style="font-family:monospace;font-size:10px;color:#444;margin-bottom:8px;">'
+        f'voice: {selected_voice} &nbsp;|&nbsp; jezik: {lang_label}</div>',
         unsafe_allow_html=True)
 
     tts_text = st.text_area(
-        "Tekst za čitanje (editabilan — možeš zalijepiti bilo koji tekst):",
-        value=st.session_state.transcript_text,
+        "Tekst za čitanje:",
+        value=st.session_state.get("tts_input", st.session_state.transcript_text),
         height=160,
-        key="tts_input"
+        key="tts_text_area"
     )
 
     if st.button("🔊  GENERIRAJ GOVOR", key="tts_btn"):
@@ -730,24 +752,52 @@ with st.expander("⚙️  SETTINGS", expanded=False):
         st.success("✓ Prijavljen kao admin")
         if st.button("Odjava", key="logout_btn"):
             st.session_state.admin_ok=False; st.rerun()
+
         st.markdown("---")
         st.markdown("**Google Sheets**")
         new_url=st.text_input("Google Sheet URL:", value=cfg["sheet_url"])
+
         st.markdown("**Limit minuta / mjesec**")
         new_limit=st.number_input("Minuta:", min_value=10, max_value=10000,
                                    value=cfg["monthly_limit_min"], step=10)
+
+        st.markdown("**Datum otvaranja AssemblyAI računa**")
+        col_date, col_today = st.columns([3,1])
+        with col_date:
+            new_billing=st.text_input(
+                "Billing start (YYYY-MM-DD):",
+                value=cfg.get("billing_start","2026-05-14"),
+                help="Datum od kojeg AssemblyAI broji limit")
+        with col_today:
+            st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
+            if st.button("📅 Danas", key="btn_today"):
+                cfg["billing_start"]=datetime.now().strftime("%Y-%m-%d")
+                save_settings(cfg); st.rerun()
+
+        st.markdown(
+            f'<div style="font-family:monospace;font-size:11px;color:#ff6600;margin-bottom:8px;">'
+            f'Trenutni period: {period_start.strftime("%d.%m.%Y")} → '
+            f'{period_end.strftime("%d.%m.%Y")} · još {days_left} dana</div>',
+            unsafe_allow_html=True)
+
         st.markdown("**Naziv aplikacije**")
         new_title=st.text_input("App title:", value=cfg["app_title"])
+
         col1,col2=st.columns(2)
         with col1:
             if st.button("💾  Spremi postavke"):
-                cfg["sheet_url"]=new_url; cfg["monthly_limit_min"]=int(new_limit)
-                cfg["app_title"]=new_title; save_settings(cfg)
-                get_sheet.clear(); st.success("Spremljeno!"); st.rerun()
+                cfg["sheet_url"]         = new_url
+                cfg["monthly_limit_min"] = int(new_limit)
+                cfg["app_title"]         = new_title
+                cfg["billing_start"]     = new_billing
+                save_settings(cfg)
+                get_sheet.clear()
+                st.success("Spremljeno!"); st.rerun()
         with col2:
             if st.button("🗑  Obriši log", type="secondary"):
                 sheet_clear_log(); get_sheet.clear()
                 st.warning("Log obrisan."); st.rerun()
+
         st.markdown("---")
         st.markdown("**Status Google Sheets**")
         if cfg["sheet_url"]:
