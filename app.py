@@ -8,10 +8,10 @@ import base64
 import threading
 import re
 import ipaddress
-import io
+import subprocess
+import tempfile
 from datetime import datetime
 from pathlib import Path
-from pydub import AudioSegment
 
 import gspread
 from google.oauth2.service_account import Credentials
@@ -29,8 +29,8 @@ def load_settings():
         except:
             pass
     return {
-        "sheet_url":  st.secrets.get("GOOGLE_SHEET_URL", ""),
-        "app_title":  "MARKO TRANSCRIBE",
+        "sheet_url": st.secrets.get("GOOGLE_SHEET_URL", ""),
+        "app_title": "MARKO TRANSCRIBE",
     }
 
 def save_settings(s):
@@ -153,23 +153,47 @@ def format_duration(sec):
         return "0:00"
     return f"{sec//60}:{sec%60:02d}"
 
-# ── Mono konverzija ───────────────────────────────────────────────────────────
+# ── Stereo → Mono via ffmpeg ──────────────────────────────────────────────────
 def ensure_mono(audio_bytes, filename):
-    """Stereo → mono, miješa kanale, -6dB. Mono fajlove ne dira."""
+    ext = os.path.splitext(filename)[-1].lower() or ".mp3"
+    if ext == ".mxf":
+        ext = ".mp4"
+    tmp_in = tmp_out = None
     try:
-        ext = os.path.splitext(filename)[-1].lower().replace(".", "") or "mp3"
-        if ext == "mxf":
-            ext = "mp4"
-        audio = AudioSegment.from_file(io.BytesIO(audio_bytes), format=ext)
-        if audio.channels == 1:
+        with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as f:
+            f.write(audio_bytes)
+            tmp_in = f.name
+
+        probe = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "a:0",
+             "-show_entries", "stream=channels",
+             "-of", "default=noprint_wrappers=1:nokey=1", tmp_in],
+            capture_output=True, text=True)
+        channels = probe.stdout.strip()
+
+        if channels == "1":
             return audio_bytes, False
-        mono = audio.set_channels(1).apply_gain(-6)
-        buf  = io.BytesIO()
-        mono.export(buf, format="mp3")
-        return buf.getvalue(), True
+
+        tmp_out = tmp_in + "_mono.mp3"
+        subprocess.run(
+            ["ffmpeg", "-y", "-i", tmp_in,
+             "-ac", "1", "-af", "volume=-6dB", tmp_out],
+            capture_output=True, check=True)
+
+        with open(tmp_out, "rb") as f:
+            result = f.read()
+        return result, True
+
     except Exception as e:
         st.warning(f"Mono konverzija nije uspjela ({e}) — šaljem original.")
         return audio_bytes, False
+    finally:
+        for p in [tmp_in, tmp_out]:
+            if p:
+                try:
+                    os.unlink(p)
+                except:
+                    pass
 
 # ════════════════════════════════════════════════════════════════════════════
 # EDGE TTS
@@ -317,7 +341,7 @@ function changeSpeed(){{audio.playbackRate=parseFloat(document.getElementById('s
 st.set_page_config(page_title=cfg["app_title"], page_icon="🎙️", layout="centered")
 st.markdown(
     '<div style="position:fixed;top:8px;left:12px;color:#555;font-size:11px;'
-    'z-index:9999;font-family:monospace;">v2.1</div>',
+    'z-index:9999;font-family:monospace;">v2.2</div>',
     unsafe_allow_html=True)
 
 st.markdown("""
@@ -359,22 +383,18 @@ if "download_filename" not in st.session_state:
     st.session_state.download_filename = "transkript.txt"
 
 # ════════════════════════════════════════════════════════════════════════════
-# USAGE BAR — $50 lifetime credits, Universal-2 $0.15/h mono
+# USAGE BAR — $50 lifetime, Universal-2 $0.15/h mono
 # ════════════════════════════════════════════════════════════════════════════
-log_entries    = sheet_load() if cfg["sheet_url"] else []
-RATE_PER_SEC   = 0.15 / 3600        # Universal-2, mono, per second
-TOTAL_CREDITS  = 50.00
-used_dollars   = sum(int(e.get("duration_sec", 0)) for e in log_entries) * RATE_PER_SEC
-remaining_usd  = max(0.0, TOTAL_CREDITS - used_dollars)
-remaining_hrs  = remaining_usd / 0.15
-remaining_min  = remaining_hrs * 60
-pct            = min(1.0, used_dollars / TOTAL_CREDITS)
-bar_color      = "#44cc88" if pct < 0.7 else "#ffaa00" if pct < 0.9 else "#ff4444"
-
-if remaining_hrs >= 1.0:
-    time_left_str = f"{remaining_hrs:.1f} h  ({remaining_min:.0f} min)"
-else:
-    time_left_str = f"{remaining_min:.0f} min"
+log_entries   = sheet_load() if cfg["sheet_url"] else []
+RATE_PER_SEC  = 0.15 / 3600
+TOTAL_CREDITS = 50.00
+used_dollars  = sum(int(e.get("duration_sec", 0)) for e in log_entries) * RATE_PER_SEC
+remaining_usd = max(0.0, TOTAL_CREDITS - used_dollars)
+remaining_hrs = remaining_usd / 0.15
+remaining_min = remaining_hrs * 60
+pct           = min(1.0, used_dollars / TOTAL_CREDITS)
+bar_color     = "#44cc88" if pct < 0.7 else "#ffaa00" if pct < 0.9 else "#ff4444"
+time_left_str = f"{remaining_hrs:.1f} h  ({remaining_min:.0f} min)" if remaining_hrs >= 1.0 else f"{remaining_min:.0f} min"
 
 st.markdown(f"""
 <div style="background:#111;border:1px solid #2a2a2a;border-radius:8px;padding:14px;margin-bottom:16px;">
@@ -409,7 +429,6 @@ include_timecode = timecode_option == "S timecodeom"
 st.markdown("---")
 input_mode = st.radio("IZVOR ZVUKA", ["📁 Upload datoteke","🎤 Snimi + spremi + upload"], horizontal=True)
 
-# ── Browser rekorder ──────────────────────────────────────────────────────────
 RECORDER_HTML = """
 <div style="background:#111;border:1px solid #2a2a2a;border-radius:8px;padding:16px;margin-bottom:8px;">
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
@@ -551,7 +570,6 @@ def upload_with_progress(audio_bytes):
     return resp.json()["upload_url"]
 
 def transcribe(audio_bytes, filename="audio"):
-    # Stereo → mono konverzija prije uploada
     audio_bytes, was_converted = ensure_mono(audio_bytes, filename)
     if was_converted:
         st.info("🔀 Stereo → Mono konverzija obavljena. Štediš 50% kredita.")
