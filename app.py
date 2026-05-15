@@ -100,10 +100,24 @@ def sheet_clear_log():
 
 # ── IP helpers ────────────────────────────────────────────────────────────────
 def get_client_ip():
+    import ipaddress
+    def is_private(ip_str):
+        try:
+            return ipaddress.ip_address(ip_str).is_private
+        except:
+            return True
     try:
-        fwd = st.context.headers.get("X-Forwarded-For","")
-        if fwd: return fwd.split(",")[0].strip()
-        return st.context.headers.get("X-Real-IP","unknown")
+        fwd = st.context.headers.get("X-Forwarded-For", "")
+        if fwd:
+            for candidate in [ip.strip() for ip in fwd.split(",")]:
+                if candidate and not is_private(candidate):
+                    return candidate
+        real = st.context.headers.get("X-Real-IP", "")
+        if real and not is_private(real):
+            return real
+        # Fallback — pitaj vanjski servis
+        r = requests.get("https://api.ipify.org?format=json", timeout=4)
+        return r.json().get("ip", "unknown")
     except:
         return "unknown"
 
