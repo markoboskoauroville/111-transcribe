@@ -328,6 +328,10 @@ if "transcript_text" not in st.session_state:
     st.session_state.transcript_text = ""
 if "admin_ok" not in st.session_state:
     st.session_state.admin_ok = False
+if "tts_open" not in st.session_state:
+    st.session_state.tts_open = False
+if "tts_input" not in st.session_state:
+    st.session_state.tts_input = ""
 
 # ════════════════════════════════════════════════════════════════════════════
 # USAGE BAR
@@ -388,7 +392,7 @@ RECORDER_HTML = """
   <div style="display:flex;gap:10px;margin-bottom:12px;">
     <button id="btnStart" onclick="startRec()"
       style="flex:1;background:#ff6600;color:#000;border:none;border-radius:4px;
-             padding:12px;font-weight:700;font-size:13px;cursor:pointer;">▶ START</button>
+             padding:12px;font-weight:700;font-size:13px;cursor:pointer;">⏺ REC</button>
     <button id="btnStop" onclick="stopRec()" disabled
       style="flex:1;background:#333;color:#666;border:1px solid #444;border-radius:4px;
              padding:12px;font-weight:700;font-size:13px;cursor:not-allowed;">■ STOP</button>
@@ -579,7 +583,11 @@ if uploaded_file:
     if st.button("▶  POKRETANJE TRANSKRIPCIJE"):
         try:
             result_text, dur = transcribe(uploaded_file.read(), uploaded_file.name)
+            
             st.session_state.transcript_text = result_text
+            st.session_state["tts_input"]    = result_text
+            st.session_state.tts_open        = True
+            
             base=os.path.splitext(uploaded_file.name)[0]
             tc_s="_timecode" if include_timecode else ""
             st.session_state.download_filename=f"{base}_{lang_code}{tc_s}.txt"
@@ -601,7 +609,9 @@ if st.session_state.transcript_text:
 # TTS READER
 # ════════════════════════════════════════════════════════════════════════════
 st.markdown("---")
-with st.expander("🔊  READ TRANSCRIPT — Edge Neural Voice", expanded=False):
+
+with st.expander("🔊  READ TRANSCRIPT — Edge Neural Voice",
+                 expanded=st.session_state.tts_open):
 
     st.markdown(
         '<div style="font-family:monospace;font-size:11px;color:#555;'
