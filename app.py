@@ -8,9 +8,10 @@ import base64
 import threading
 import re
 import ipaddress
-import calendar
-from datetime import datetime, timedelta
+import io
+from datetime import datetime
 from pathlib import Path
+from pydub import AudioSegment
 
 import gspread
 from google.oauth2.service_account import Credentials
@@ -19,8 +20,7 @@ from google.oauth2.service_account import Credentials
 API_KEY        = st.secrets["ASSEMBLYAI_API_KEY"]
 HEADERS        = {"authorization": API_KEY}
 ADMIN_PASSWORD = st.secrets.get("ADMIN_PASSWORD", "admin123")
-
-SETTINGS_FILE = Path("/tmp/marko_settings.json")
+SETTINGS_FILE  = Path("/tmp/marko_settings.json")
 
 def load_settings():
     if SETTINGS_FILE.exists():
@@ -29,10 +29,8 @@ def load_settings():
         except:
             pass
     return {
-        "sheet_url":         st.secrets.get("GOOGLE_SHEET_URL", ""),
-        "monthly_limit_min": int(st.secrets.get("MONTHLY_LIMIT_MIN", 180)),
-        "app_title":         "MARKO TRANSCRIBE",
-        "billing_start":     "2026-05-14",
+        "sheet_url":  st.secrets.get("GOOGLE_SHEET_URL", ""),
+        "app_title":  "MARKO TRANSCRIBE",
     }
 
 def save_settings(s):
@@ -155,25 +153,23 @@ def format_duration(sec):
         return "0:00"
     return f"{sec//60}:{sec%60:02d}"
 
-def get_billing_window(billing_start_str):
+# ── Mono konverzija ───────────────────────────────────────────────────────────
+def ensure_mono(audio_bytes, filename):
+    """Stereo → mono, miješa kanale, -6dB. Mono fajlove ne dira."""
     try:
-        start = datetime.strptime(billing_start_str, "%Y-%m-%d")
-    except:
-        start = datetime.now().replace(day=1)
-    now = datetime.now()
-    period_start = start
-    while True:
-        month = period_start.month + 1
-        year  = period_start.year
-        if month > 12:
-            month = 1
-            year += 1
-        day        = min(start.day, calendar.monthrange(year, month)[1])
-        period_end = period_start.replace(year=year, month=month, day=day)
-        if now < period_end:
-            break
-        period_start = period_end
-    return period_start, period_end
+        ext = os.path.splitext(filename)[-1].lower().replace(".", "") or "mp3"
+        if ext == "mxf":
+            ext = "mp4"
+        audio = AudioSegment.from_file(io.BytesIO(audio_bytes), format=ext)
+        if audio.channels == 1:
+            return audio_bytes, False
+        mono = audio.set_channels(1).apply_gain(-6)
+        buf  = io.BytesIO()
+        mono.export(buf, format="mp3")
+        return buf.getvalue(), True
+    except Exception as e:
+        st.warning(f"Mono konverzija nije uspjela ({e}) — šaljem original.")
+        return audio_bytes, False
 
 # ════════════════════════════════════════════════════════════════════════════
 # EDGE TTS
@@ -321,7 +317,7 @@ function changeSpeed(){{audio.playbackRate=parseFloat(document.getElementById('s
 st.set_page_config(page_title=cfg["app_title"], page_icon="🎙️", layout="centered")
 st.markdown(
     '<div style="position:fixed;top:8px;left:12px;color:#555;font-size:11px;'
-    'z-index:9999;font-family:monospace;">v2.0</div>',
+    'z-index:9999;font-family:monospace;">v2.1</div>',
     unsafe_allow_html=True)
 
 st.markdown("""
@@ -350,7 +346,7 @@ st.markdown("""
 st.markdown(f"<h1>🎙️ {cfg['app_title']}</h1>", unsafe_allow_html=True)
 st.markdown('<div class="subtitle">Personal Transcription Tool</div>', unsafe_allow_html=True)
 
-# ── Session state init ────────────────────────────────────────────────────────
+# ── Session state ─────────────────────────────────────────────────────────────
 if "transcript_text" not in st.session_state:
     st.session_state.transcript_text = ""
 if "admin_ok" not in st.session_state:
@@ -363,40 +359,39 @@ if "download_filename" not in st.session_state:
     st.session_state.download_filename = "transkript.txt"
 
 # ════════════════════════════════════════════════════════════════════════════
-# USAGE BAR
+# USAGE BAR — $50 lifetime credits, Universal-2 $0.15/h mono
 # ════════════════════════════════════════════════════════════════════════════
-log_entries              = sheet_load() if cfg["sheet_url"] else []
-monthly_sec              = cfg["monthly_limit_min"] * 60
-now                      = datetime.now()
-period_start, period_end = get_billing_window(cfg.get("billing_start","2026-05-14"))
+log_entries    = sheet_load() if cfg["sheet_url"] else []
+RATE_PER_SEC   = 0.15 / 3600        # Universal-2, mono, per second
+TOTAL_CREDITS  = 50.00
+used_dollars   = sum(int(e.get("duration_sec", 0)) for e in log_entries) * RATE_PER_SEC
+remaining_usd  = max(0.0, TOTAL_CREDITS - used_dollars)
+remaining_hrs  = remaining_usd / 0.15
+remaining_min  = remaining_hrs * 60
+pct            = min(1.0, used_dollars / TOTAL_CREDITS)
+bar_color      = "#44cc88" if pct < 0.7 else "#ffaa00" if pct < 0.9 else "#ff4444"
 
-used_sec = sum(
-    int(e.get("duration_sec", 0))
-    for e in log_entries
-    if str(e.get("date","1970-01-01")) >= period_start.strftime("%Y-%m-%d")
-    and str(e.get("date","1970-01-01")) < period_end.strftime("%Y-%m-%d")
-)
-remaining_sec = max(0, monthly_sec - used_sec)
-pct           = min(1.0, used_sec / monthly_sec) if monthly_sec else 0
-bar_color     = "#44cc88" if pct < 0.7 else "#ffaa00" if pct < 0.9 else "#ff4444"
-days_left     = (period_end - now).days
+if remaining_hrs >= 1.0:
+    time_left_str = f"{remaining_hrs:.1f} h  ({remaining_min:.0f} min)"
+else:
+    time_left_str = f"{remaining_min:.0f} min"
 
 st.markdown(f"""
 <div style="background:#111;border:1px solid #2a2a2a;border-radius:8px;padding:14px;margin-bottom:16px;">
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
     <span style="font-family:monospace;font-size:11px;color:#555;letter-spacing:2px;">
-      ASSEMBLYAI · {period_start.strftime('%d.%m.')} → {period_end.strftime('%d.%m.%Y')} · još {days_left}d
+      ASSEMBLYAI FREE · Universal-2 · mono · $0.15/h
     </span>
     <span style="font-family:monospace;font-size:14px;color:{bar_color};font-weight:700;">
-      ⏱ {remaining_sec//60}:{remaining_sec%60:02d} min preostalo
+      ${remaining_usd:.2f} · ⏱ {time_left_str}
     </span>
   </div>
   <div style="background:#1a1a1a;border-radius:4px;height:10px;overflow:hidden;margin-bottom:6px;">
     <div style="width:{int(pct*100)}%;height:100%;background:{bar_color};border-radius:4px;"></div>
   </div>
   <div style="display:flex;justify-content:space-between;font-family:monospace;font-size:10px;color:#555;">
-    <span>iskorišteno: {used_sec//60}:{used_sec%60:02d} min</span>
-    <span>limit: {cfg['monthly_limit_min']} min</span>
+    <span>potrošeno: ${used_dollars:.3f} od ${TOTAL_CREDITS:.2f} ukupno</span>
+    <span>krediti ne istječu · stereo→mono automatski</span>
   </div>
 </div>
 """, unsafe_allow_html=True)
@@ -556,6 +551,11 @@ def upload_with_progress(audio_bytes):
     return resp.json()["upload_url"]
 
 def transcribe(audio_bytes, filename="audio"):
+    # Stereo → mono konverzija prije uploada
+    audio_bytes, was_converted = ensure_mono(audio_bytes, filename)
+    if was_converted:
+        st.info("🔀 Stereo → Mono konverzija obavljena. Štediš 50% kredita.")
+
     upload_url=upload_with_progress(audio_bytes)
     st.info("✓ Uploadano. Pokrećem transkripciju...")
     tr=requests.post(
@@ -653,29 +653,19 @@ if st.session_state.transcript_text:
 st.markdown("---")
 with st.expander("🔊  READ TRANSCRIPT — Edge Neural Voice",
                  expanded=st.session_state.tts_open):
-
     st.session_state.tts_open = True
-
     gender = st.radio(
-        "Spol glasa",
-        ["🚺 Female","🚹 Male"],
-        horizontal=True,
-        label_visibility="collapsed",
-        key="tts_gender"
-    )
+        "Spol glasa", ["🚺 Female","🚹 Male"],
+        horizontal=True, label_visibility="collapsed", key="tts_gender")
     selected_voice = VOICE_MAP.get(lang_label, VOICE_MAP["English"])[gender]
     st.markdown(
         f'<div style="font-family:monospace;font-size:10px;color:#444;margin-bottom:8px;">'
         f'voice: {selected_voice} &nbsp;|&nbsp; jezik: {lang_label}</div>',
         unsafe_allow_html=True)
-
     tts_text = st.text_area(
         "Tekst za čitanje:",
         value=st.session_state.get("tts_input", st.session_state.transcript_text),
-        height=160,
-        key="tts_text_area"
-    )
-
+        height=160, key="tts_text_area")
     if st.button("🔊  GENERIRAJ GOVOR", key="tts_btn"):
         clean_text = tts_text.strip()
         if not clean_text:
@@ -712,6 +702,7 @@ with st.expander(f"📋  USAGE LOG — {len(log_entries)} zapisa", expanded=Fals
             preview=f"{preview_f} ... {preview_l}" if preview_f else "(nema teksta)"
             loc=f"{e.get('city','')} {e.get('country','')}".strip()
             dur_str=format_duration(e.get("duration_sec",0))
+            cost_str=f"${int(e.get('duration_sec',0))*RATE_PER_SEC:.4f}"
             if tag=="nova":
                 tag_html='<span style="color:#00aaff;font-weight:700;">■ NOVA TV</span>'
                 border="#00aaff"
@@ -726,7 +717,7 @@ with st.expander(f"📋  USAGE LOG — {len(log_entries)} zapisa", expanded=Fals
             margin-bottom:6px;border-radius:4px;font-family:monospace;font-size:12px;">
   <div style="display:flex;justify-content:space-between;margin-bottom:3px;">
     <span style="color:#666;">{e.get('date','')} {e.get('time','')}</span>
-    <span style="color:#555;">⏱ {dur_str}</span>
+    <span style="color:#555;">⏱ {dur_str} · {cost_str}</span>
     {tag_html}
   </div>
   <div style="color:#ccc;margin-bottom:3px;">"{preview}"</div>
@@ -752,44 +743,22 @@ with st.expander("⚙️  SETTINGS", expanded=False):
         st.success("✓ Prijavljen kao admin")
         if st.button("Odjava", key="logout_btn"):
             st.session_state.admin_ok=False; st.rerun()
-
         st.markdown("---")
         st.markdown("**Google Sheets**")
         new_url=st.text_input("Google Sheet URL:", value=cfg["sheet_url"])
-
-        st.markdown("**Limit minuta / mjesec**")
-        new_limit=st.number_input("Minuta:", min_value=10, max_value=10000,
-                                   value=cfg["monthly_limit_min"], step=10)
-
-        st.markdown("**Datum otvaranja AssemblyAI računa**")
-        col_date, col_today = st.columns([3,1])
-        with col_date:
-            new_billing=st.text_input(
-                "Billing start (YYYY-MM-DD):",
-                value=cfg.get("billing_start","2026-05-14"),
-                help="Datum od kojeg AssemblyAI broji limit")
-        with col_today:
-            st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
-            if st.button("📅 Danas", key="btn_today"):
-                cfg["billing_start"]=datetime.now().strftime("%Y-%m-%d")
-                save_settings(cfg); st.rerun()
-
-        st.markdown(
-            f'<div style="font-family:monospace;font-size:11px;color:#ff6600;margin-bottom:8px;">'
-            f'Trenutni period: {period_start.strftime("%d.%m.%Y")} → '
-            f'{period_end.strftime("%d.%m.%Y")} · još {days_left} dana</div>',
-            unsafe_allow_html=True)
-
         st.markdown("**Naziv aplikacije**")
         new_title=st.text_input("App title:", value=cfg["app_title"])
-
+        st.markdown(
+            f'<div style="font-family:monospace;font-size:11px;color:#ff6600;margin:8px 0;">'
+            f'Potrošeno: ${used_dollars:.3f} &nbsp;|&nbsp; '
+            f'Preostalo: ${remaining_usd:.2f} &nbsp;|&nbsp; '
+            f'{remaining_hrs:.1f} h &nbsp;|&nbsp; {remaining_min:.0f} min</div>',
+            unsafe_allow_html=True)
         col1,col2=st.columns(2)
         with col1:
             if st.button("💾  Spremi postavke"):
-                cfg["sheet_url"]         = new_url
-                cfg["monthly_limit_min"] = int(new_limit)
-                cfg["app_title"]         = new_title
-                cfg["billing_start"]     = new_billing
+                cfg["sheet_url"] = new_url
+                cfg["app_title"] = new_title
                 save_settings(cfg)
                 get_sheet.clear()
                 st.success("Spremljeno!"); st.rerun()
@@ -797,7 +766,6 @@ with st.expander("⚙️  SETTINGS", expanded=False):
             if st.button("🗑  Obriši log", type="secondary"):
                 sheet_clear_log(); get_sheet.clear()
                 st.warning("Log obrisan."); st.rerun()
-
         st.markdown("---")
         st.markdown("**Status Google Sheets**")
         if cfg["sheet_url"]:
