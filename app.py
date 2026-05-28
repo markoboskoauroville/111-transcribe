@@ -20,7 +20,7 @@ from google.oauth2.service_account import Credentials
 API_KEY        = st.secrets["ASSEMBLYAI_API_KEY"]
 HEADERS        = {"authorization": API_KEY}
 ADMIN_PASSWORD = st.secrets.get("ADMIN_PASSWORD", "admin123")
-SETTINGS_FILE  = Path("/tmp/marko_settings.json")
+SETTINGS_FILE  = Path("/tmp/Marko_settings.json")
 
 def load_settings():
     if SETTINGS_FILE.exists():
@@ -30,7 +30,7 @@ def load_settings():
             pass
     return {
         "sheet_url": st.secrets.get("GOOGLE_SHEET_URL", ""),
-        "app_title": "Marko Transcribe",
+        "app_title": "Marko TRANSCRIBE",
     }
 
 def save_settings(s):
@@ -657,7 +657,7 @@ def translate_text(text, from_code, to_code):
 # ════════════════════════════════════════════════════════════════════════════
 # 3-TAB LAYOUT
 # ════════════════════════════════════════════════════════════════════════════
-tab1, tab2, tab3, tab4 = st.tabs(["Transcript", "Translation", "TTS", "cre"])
+tab1, tab2, tab3, tab4 = st.tabs(["Transcript", "Translation", "TTS", "CRE"])
 
 
 # ─────────────────────────────────────────────────────
@@ -916,25 +916,71 @@ with tab3:
 # TAB 4 — CRE  (Credits)
 # ─────────────────────────────────────────────────────
 with tab4:
+    # Load any saved real balance from settings
+    real_balance = cfg.get("real_balance", None)
+
+    # If user has entered a real balance, calculate correction offset
+    if real_balance is not None:
+        offset       = real_balance - remaining_usd
+        display_usd  = real_balance
+        display_used = TOTAL_CREDITS - real_balance
+    else:
+        offset       = 0.0
+        display_usd  = remaining_usd
+        display_used = used_dollars
+
+    display_hrs  = display_usd / 0.15
+    display_min  = display_hrs * 60
+    display_pct  = min(1.0, (TOTAL_CREDITS - display_usd) / TOTAL_CREDITS)
+    disp_color   = "#44cc88" if display_pct < 0.7 else "#ffaa00" if display_pct < 0.9 else "#ff4444"
+    disp_time    = f"{display_hrs:.1f} h  ({display_min:.0f} min)" if display_hrs >= 1.0 else f"{display_min:.0f} min"
+
     st.markdown(f"""
-<div style="background:#111;border:1px solid #2a2a2a;border-radius:8px;padding:16px;">
+<div style="background:#111;border:1px solid #2a2a2a;border-radius:8px;padding:16px;margin-bottom:14px;">
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
     <span style="font-family:monospace;font-size:11px;color:#555;letter-spacing:2px;">
-      ASSEMBLYAI · best model · auto detect · mono · $0.15/h
+      ASSEMBLYAI · $0.15/h · best model
     </span>
-    <span style="font-family:monospace;font-size:15px;color:{bar_color};font-weight:700;">
-      ${remaining_usd:.2f}
+    <span style="font-family:monospace;font-size:15px;color:{disp_color};font-weight:700;">
+      ${display_usd:.2f} remaining
     </span>
   </div>
   <div style="background:#1a1a1a;border-radius:4px;height:10px;overflow:hidden;margin-bottom:8px;">
-    <div style="width:{int(pct*100)}%;height:100%;background:{bar_color};border-radius:4px;"></div>
+    <div style="width:{int(display_pct*100)}%;height:100%;background:{disp_color};border-radius:4px;"></div>
   </div>
   <div style="display:flex;justify-content:space-between;font-family:monospace;font-size:10px;color:#555;">
-    <span>used: ${used_dollars:.3f} of ${TOTAL_CREDITS:.2f}</span>
-    <span>time left: {time_left_str}</span>
+    <span>sheet estimate: ${remaining_usd:.3f} remaining</span>
+    <span>time left: {disp_time}</span>
   </div>
-  <div style="margin-top:8px;font-family:monospace;font-size:10px;color:#444;text-align:right;">
-    credits never expire · stereo→mono auto
-  </div>
+  {"" if real_balance is None else f'<div style="font-family:monospace;font-size:10px;color:#4a9;margin-top:4px;">✓ calibrated · offset {offset:+.3f}</div>'}
 </div>
 """, unsafe_allow_html=True)
+
+    st.markdown(
+        '<div style="font-family:monospace;font-size:11px;color:#555;margin-bottom:6px;">'        'Calibrate — enter real balance from AssemblyAI dashboard:</div>',
+        unsafe_allow_html=True)
+
+    col_bal, col_set = st.columns([3, 1])
+    with col_bal:
+        bal_input = st.number_input(
+            "Real balance ($)",
+            min_value=0.0, max_value=500.0,
+            value=float(real_balance) if real_balance is not None else remaining_usd,
+            step=0.01, format="%.2f",
+            label_visibility="collapsed",
+            key="real_balance_input")
+    with col_set:
+        if st.button("Set", use_container_width=True, key="set_balance_btn"):
+            cfg["real_balance"] = round(bal_input, 4)
+            save_settings(cfg)
+            st.success(f"Calibrated to ${bal_input:.2f}")
+            st.rerun()
+
+    if real_balance is not None:
+        st.markdown(
+            f'<div style="font-family:monospace;font-size:10px;color:#555;margin-top:4px;">'            f'Sheet estimate was ${remaining_usd:.3f} · real was ${real_balance:.3f} '            f'· offset applied: {offset:+.3f}</div>',
+            unsafe_allow_html=True)
+        if st.button("Clear calibration", key="clear_cal"):
+            cfg.pop("real_balance", None)
+            save_settings(cfg)
+            st.rerun()
