@@ -30,7 +30,7 @@ def load_settings():
             pass
     return {
         "sheet_url": st.secrets.get("GOOGLE_SHEET_URL", ""),
-        "app_title": "MARKO TRANSCRIBE",
+        "app_title": "Marko Transcribe",
     }
 
 def save_settings(s):
@@ -341,7 +341,7 @@ function changeSpeed(){{audio.playbackRate=parseFloat(document.getElementById('s
 st.set_page_config(page_title=cfg["app_title"], page_icon="🎙️", layout="centered")
 st.markdown(
     '<div style="position:fixed;top:8px;left:12px;color:#555;font-size:11px;'
-    'z-index:9999;font-family:monospace;">v2.2</div>',
+    'z-index:9999;font-family:monospace;">v2.4</div>',
     unsafe_allow_html=True)
 
 st.markdown("""
@@ -354,7 +354,7 @@ st.markdown("""
   .stRadio>label{color:#aaa;font-size:.8rem;letter-spacing:1px;text-transform:uppercase;}
   .stRadio div[role="radiogroup"] label{color:#ccc;}
   .stButton>button{background:#ff6600;color:#000;font-weight:700;border:none;border-radius:4px;
-    padding:10px 28px;letter-spacing:1px;text-transform:uppercase;}
+    padding:7px 14px;letter-spacing:0.5px;font-size:.85rem;text-transform:uppercase;}
   .stButton>button:hover{background:#cc5200;color:#fff;}
   .stTextArea textarea{background:#2a2a2a;color:#e0e0e0;border:1px solid #444;
     font-family:'Courier New',monospace;font-size:.9rem;}
@@ -363,27 +363,36 @@ st.markdown("""
   .stDownloadButton>button:hover{background:#ff6600;color:#000;}
   .status-box{background:#222;border-left:3px solid #ff6600;padding:10px 16px;
     border-radius:4px;margin:12px 0;font-size:.9rem;color:#aaa;}
+  .detected-lang{background:#1a1a2e;border-left:3px solid #4466ff;padding:8px 14px;
+    border-radius:4px;margin:8px 0;font-size:.85rem;color:#aab4ff;font-family:monospace;}
   .stExpander{border:1px solid #2a2a2a !important;border-radius:6px !important;}
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown(f"<h1>🎙️ {cfg['app_title']}</h1>", unsafe_allow_html=True)
-st.markdown('<div class="subtitle">Personal Transcription Tool</div>', unsafe_allow_html=True)
 
 # ── Session state ─────────────────────────────────────────────────────────────
-if "transcript_text" not in st.session_state:
-    st.session_state.transcript_text = ""
-if "admin_ok" not in st.session_state:
-    st.session_state.admin_ok = False
-if "tts_open" not in st.session_state:
-    st.session_state.tts_open = False
-if "tts_input" not in st.session_state:
-    st.session_state.tts_input = ""
-if "download_filename" not in st.session_state:
-    st.session_state.download_filename = "transkript.txt"
+for key, default in [
+    ("transcript_text", ""),
+    ("admin_ok",        False),
+    ("tts_open",        False),
+    ("tts_input",       ""),
+    ("download_filename","transkript.txt"),
+    ("detected_lang",   ""),
+    ("trl_result",      ""),
+    ("trl_open",        False),
+    ("copy_triggered",  False),
+]:
+    if key not in st.session_state:
+        st.session_state[key] = default
 
 # ════════════════════════════════════════════════════════════════════════════
-# USAGE BAR — $50 lifetime, Universal-2 $0.15/h mono
+# LANGUAGE MAPS
+# ════════════════════════════════════════════════════════════════════════════
+LANGUAGE_MAP = {"Hrvatski":"hr","English":"en","Italiano":"it","Deutsch":"de","Français":"fr"}
+CODE_TO_LABEL = {v: k for k, v in LANGUAGE_MAP.items()}
+
+# ════════════════════════════════════════════════════════════════════════════
+# USAGE STATS
 # ════════════════════════════════════════════════════════════════════════════
 log_entries   = sheet_load() if cfg["sheet_url"] else []
 RATE_PER_SEC  = 0.15 / 3600
@@ -394,41 +403,12 @@ remaining_hrs = remaining_usd / 0.15
 remaining_min = remaining_hrs * 60
 pct           = min(1.0, used_dollars / TOTAL_CREDITS)
 bar_color     = "#44cc88" if pct < 0.7 else "#ffaa00" if pct < 0.9 else "#ff4444"
-time_left_str = f"{remaining_hrs:.1f} h  ({remaining_min:.0f} min)" if remaining_hrs >= 1.0 else f"{remaining_min:.0f} min"
-
-st.markdown(f"""
-<div style="background:#111;border:1px solid #2a2a2a;border-radius:8px;padding:14px;margin-bottom:16px;">
-  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
-    <span style="font-family:monospace;font-size:11px;color:#555;letter-spacing:2px;">
-      ASSEMBLYAI FREE · Universal-2 · mono · $0.15/h
-    </span>
-    <span style="font-family:monospace;font-size:14px;color:{bar_color};font-weight:700;">
-      ${remaining_usd:.2f} · ⏱ {time_left_str}
-    </span>
-  </div>
-  <div style="background:#1a1a1a;border-radius:4px;height:10px;overflow:hidden;margin-bottom:6px;">
-    <div style="width:{int(pct*100)}%;height:100%;background:{bar_color};border-radius:4px;"></div>
-  </div>
-  <div style="display:flex;justify-content:space-between;font-family:monospace;font-size:10px;color:#555;">
-    <span>potrošeno: ${used_dollars:.3f} od ${TOTAL_CREDITS:.2f} ukupno</span>
-    <span>krediti ne istječu · stereo→mono automatski</span>
-  </div>
-</div>
-""", unsafe_allow_html=True)
+time_left_str = (f"{remaining_hrs:.1f} h  ({remaining_min:.0f} min)"
+                 if remaining_hrs >= 1.0 else f"{remaining_min:.0f} min")
 
 # ════════════════════════════════════════════════════════════════════════════
-# TRANSCRIPTION
+# RECORDER HTML
 # ════════════════════════════════════════════════════════════════════════════
-LANGUAGE_MAP = {"Hrvatski":"hr","English":"en","Italiano":"it","Deutsch":"de","Français":"fr"}
-lang_label   = st.radio("JEZIK / LANGUAGE", list(LANGUAGE_MAP.keys()), horizontal=True)
-lang_code    = LANGUAGE_MAP[lang_label]
-
-timecode_option  = st.radio("TIMECODE U TEKSTU", ["Bez timecoda","S timecodeom"], horizontal=True)
-include_timecode = timecode_option == "S timecodeom"
-
-st.markdown("---")
-input_mode = st.radio("IZVOR ZVUKA", ["📁 Upload datoteke","🎤 Snimi + spremi + upload"], horizontal=True)
-
 RECORDER_HTML = """
 <div style="background:#111;border:1px solid #2a2a2a;border-radius:8px;padding:16px;margin-bottom:8px;">
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
@@ -544,266 +524,417 @@ function buildDownload(){
 drawLoop();window.addEventListener('load',initMic);
 </script>"""
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
+# ════════════════════════════════════════════════════════════════════════════
+# HELPERS
+# ════════════════════════════════════════════════════════════════════════════
 def ms_to_tc(ms):
     total_s = ms // 1000
     return f"{total_s//3600:02d}:{(total_s%3600)//60:02d}:{total_s%60:02d}.{(ms%1000)//10:02d}"
 
 def upload_with_progress(audio_bytes):
     CHUNK=32768; total=len(audio_bytes); uploaded=0; start=time.time()
-    pbar=st.progress(0.0, text="📤 Uploading...")
+    pbar=st.progress(0.0, text="Uploading...")
     def gen():
         nonlocal uploaded
         for i in range(0,total,CHUNK):
             chunk=audio_bytes[i:i+CHUNK]; uploaded+=len(chunk)
             elapsed=max(time.time()-start,0.001)
             pbar.progress(uploaded/total,
-                text=f"📤  {uploaded//1024} KB / {total//1024} KB   ⚡ {(uploaded/elapsed)/1024:.0f} KB/s")
+                text=f"{uploaded//1024} KB / {total//1024} KB   {(uploaded/elapsed)/1024:.0f} KB/s")
             yield chunk
     resp=requests.post(
         "https://api.assemblyai.com/v2/upload",
         headers={**HEADERS,"content-type":"application/octet-stream"},
         data=gen())
-    pbar.progress(1.0, text="✓ Upload završen!")
+    pbar.progress(1.0, text="Upload done!")
     time.sleep(0.3); pbar.empty()
     resp.raise_for_status()
     return resp.json()["upload_url"]
 
-def transcribe(audio_bytes, filename="audio"):
+def transcribe(audio_bytes, filename="audio", lang_choice="Auto detect", include_timecode=False):
     audio_bytes, was_converted = ensure_mono(audio_bytes, filename)
     if was_converted:
-        st.info("🔀 Stereo → Mono konverzija obavljena. Štediš 50% kredita.")
+        st.info("Stereo to mono conversion done.")
 
-    upload_url=upload_with_progress(audio_bytes)
-    st.info("✓ Uploadano. Pokrećem transkripciju...")
-    tr=requests.post(
+    upload_url = upload_with_progress(audio_bytes)
+    st.info("Uploaded. Starting transcription...")
+
+    if lang_choice == "Hrvatski":
+        lang_params = {"language_code": "hr"}
+    elif lang_choice == "English":
+        lang_params = {"language_code": "en"}
+    else:
+        lang_params = {"language_detection": True}
+
+    tr = requests.post(
         "https://api.assemblyai.com/v2/transcript",
-        headers={**HEADERS,"content-type":"application/json"},
-        json={"audio_url":upload_url,"language_code":lang_code,
-              "speech_models":["universal-2"],"punctuate":True,"format_text":True})
+        headers={**HEADERS, "content-type": "application/json"},
+        json={
+            "audio_url":     upload_url,
+            **lang_params,
+            "speech_models": ["universal-3-pro", "universal-2"],
+            "punctuate":     True,
+            "format_text":   True,
+        })
     tr.raise_for_status()
-    tid=tr.json()["id"]
-    ph=st.empty(); attempts=0; poll={}
+    tid = tr.json()["id"]
+    ph = st.empty(); attempts = 0; poll = {}
+
     while True:
         time.sleep(3)
-        poll=requests.get(
+        poll = requests.get(
             f"https://api.assemblyai.com/v2/transcript/{tid}",
             headers=HEADERS).json()
-        attempts+=1; ph.info(f"⏳ Transkripcija u tijeku... ({attempts*3}s)")
-        if poll.get("status")=="completed": ph.empty(); break
-        elif poll.get("status")=="error": st.error(f"Greška: {poll.get('error')}"); st.stop()
-        elif attempts>120: st.error("Timeout."); st.stop()
+        attempts += 1
+        ph.info(f"Processing... ({attempts*3}s)")
+        if poll.get("status") == "completed":
+            ph.empty(); break
+        elif poll.get("status") == "error":
+            st.error(f"Error: {poll.get('error')}"); st.stop()
+        elif attempts > 120:
+            st.error("Timeout."); st.stop()
+
+    detected_code  = poll.get("language_code", "")
+    detected_label = CODE_TO_LABEL.get(detected_code, detected_code.upper())
 
     if include_timecode and poll.get("words"):
-        words=poll["words"]; lines,cur,cs=[],[],words[0]["start"]
-        for i,w in enumerate(words):
+        words = poll["words"]; lines, cur, cs = [], [], words[0]["start"]
+        for i, w in enumerate(words):
             cur.append(w["text"])
-            if len(cur)>=10 or i==len(words)-1:
+            if len(cur) >= 10 or i == len(words) - 1:
                 lines.append(f"[{ms_to_tc(cs)}]  {' '.join(cur)}")
-                cur=[]
-                if i<len(words)-1: cs=words[i+1]["start"]
-        result_text="\n\n".join(lines)
+                cur = []
+                if i < len(words) - 1:
+                    cs = words[i+1]["start"]
+        result_text = "\n\n".join(lines)
     else:
-        result_text=poll.get("text","")
+        result_text = poll.get("text", "")
 
-    duration_sec=int(poll.get("audio_duration",0))
-    words_plain=(poll.get("text","") or "").split()
-    first_w=" ".join(words_plain[:3]); last_w=" ".join(words_plain[-3:])
-    client_ip=get_client_ip(); ip_info=get_ip_info(client_ip)
-    owner,tag=detect_owner(ip_info.get("org",""),ip_info.get("isp",""))
-    now_t=datetime.now()
-    entry={
-        "date":now_t.strftime("%Y-%m-%d"),"time":now_t.strftime("%H:%M:%S"),
-        "filename":filename,"lang":lang_label,"duration_sec":duration_sec,
-        "first_words":first_w,"last_words":last_w,"ip":client_ip,
-        "city":ip_info.get("city",""),"country":ip_info.get("country",""),
-        "org":ip_info.get("org",""),"isp":ip_info.get("isp",""),
-        "owner":owner,"tag":tag,
+    duration_sec = int(poll.get("audio_duration", 0))
+    words_plain  = (poll.get("text", "") or "").split()
+    client_ip    = get_client_ip()
+    ip_info      = get_ip_info(client_ip)
+    owner, tag   = detect_owner(ip_info.get("org",""), ip_info.get("isp",""))
+    now_t        = datetime.now()
+
+    entry = {
+        "date":         now_t.strftime("%Y-%m-%d"),
+        "time":         now_t.strftime("%H:%M:%S"),
+        "filename":     filename,
+        "lang":         detected_label,
+        "duration_sec": duration_sec,
+        "first_words":  " ".join(words_plain[:3]),
+        "last_words":   " ".join(words_plain[-3:]),
+        "ip":           client_ip,
+        "city":         ip_info.get("city",""),
+        "country":      ip_info.get("country",""),
+        "org":          ip_info.get("org",""),
+        "isp":          ip_info.get("isp",""),
+        "owner":        owner,
+        "tag":          tag,
     }
     if cfg["sheet_url"]:
         sheet_append(entry)
 
-    return result_text, duration_sec
+    return result_text, duration_sec, detected_code, detected_label
 
-# ── Upload UI ─────────────────────────────────────────────────────────────────
-if input_mode=="🎤 Snimi + spremi + upload":
-    st.markdown("**Korak 1 — Snimi i spremi na disk:**")
-    st.components.v1.html(RECORDER_HTML, height=360)
-    st.markdown("**Korak 2 — Uploadaj snimljenu datoteku:**")
+def translate_text(text, from_code, to_code):
+    r = requests.get(
+        "https://api.mymemory.translated.net/get",
+        params={
+            "q":        text[:5000],
+            "langpair": f"{from_code}|{to_code}",
+            "de":       "marko.bosko@auroville.community",
+        },
+        timeout=15)
+    r.raise_for_status()
+    data = r.json()
+    if data.get("responseStatus") != 200:
+        raise Exception(data.get("responseDetails", "Translation failed"))
+    return data["responseData"]["translatedText"]
 
-uploaded_file=st.file_uploader(
-    "Učitaj audio datoteku" if input_mode=="📁 Upload datoteke" else "Uploadaj snimku s diska",
-    type=["mp3","mp4","wav","m4a","aac","ogg","flac","webm","mov","mxf"],
-)
 
-if uploaded_file:
-    st.markdown(
-        f'<div class="status-box">📂 <strong>{uploaded_file.name}</strong> — '
-        f'{lang_label} — {uploaded_file.size//1024} KB</div>',
-        unsafe_allow_html=True)
-    if st.button("▶  POKRETANJE TRANSKRIPCIJE"):
-        try:
-            result_text, dur = transcribe(uploaded_file.read(), uploaded_file.name)
-            st.session_state.transcript_text = result_text
-            st.session_state["tts_input"]    = result_text
-            st.session_state.tts_open        = True
-            base=os.path.splitext(uploaded_file.name)[0]
-            tc_s="_timecode" if include_timecode else ""
-            st.session_state.download_filename=f"{base}_{lang_code}{tc_s}.txt"
+# ════════════════════════════════════════════════════════════════════════════
+# 3-TAB LAYOUT
+# ════════════════════════════════════════════════════════════════════════════
+tab1, tab2, tab3, tab4 = st.tabs(["Transcript", "Translation", "TTS", "cre"])
+
+
+# ─────────────────────────────────────────────────────
+# TAB 1 — TRANSCRIPT  (unchanged)
+# ─────────────────────────────────────────────────────
+with tab1:
+
+    has_transcript = bool(st.session_state.transcript_text)
+
+    if has_transcript:
+        det_code  = st.session_state.detected_lang
+        det_label = CODE_TO_LABEL.get(det_code, det_code.upper()) if det_code else ""
+
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            st.download_button(
+                label="Download",
+                data=st.session_state.transcript_text.encode("utf-8"),
+                file_name=st.session_state.download_filename,
+                mime="text/plain",
+                use_container_width=True,
+                key="dl_top")
+        with c2:
+            _copy_html = f"""<style>
+body{{margin:0;padding:0;background:transparent;}}
+.cp{{background:#ff6600;color:#000;font-weight:700;border:none;border-radius:4px;
+     padding:7px 0;font-size:.85rem;letter-spacing:.5px;text-transform:uppercase;
+     cursor:pointer;width:100%;display:block;}}
+.cp:active{{background:#cc5200;}}
+#msg{{color:#44cc88;font-family:monospace;font-size:11px;padding:2px 0;display:none;text-align:center;}}
+</style>
+<button class="cp" onclick="doCopy()">COPY</button>
+<div id="msg">✓ Copied</div>
+<script>
+function doCopy(){{
+  var t={json.dumps(st.session_state.transcript_text)};
+  var ok=false;
+  try{{
+    var ta=document.createElement('textarea');
+    ta.value=t; ta.setAttribute('readonly','');
+    ta.style.cssText='position:absolute;left:-9999px;top:0;opacity:0;';
+    document.body.appendChild(ta);
+    if(/ipad|iphone/i.test(navigator.userAgent)){{
+      var rng=document.createRange(); rng.selectNodeContents(ta);
+      var sel=window.getSelection(); sel.removeAllRanges(); sel.addRange(rng);
+      ta.setSelectionRange(0,999999);
+    }}else{{ta.select();}}
+    ok=document.execCommand('copy');
+    document.body.removeChild(ta);
+  }}catch(e){{}}
+  if(!ok&&navigator.clipboard&&navigator.clipboard.writeText){{
+    navigator.clipboard.writeText(t).catch(function(){{}});ok=true;
+  }}
+  var m=document.getElementById('msg');
+  m.style.display='block';
+  setTimeout(function(){{m.style.display='none';}},2000);
+}}
+</script>"""
+            st.components.v1.html(_copy_html, height=52)
+        with c3:
+            if st.button("New", use_container_width=True, key="new_session"):
+                st.session_state.transcript_text   = ""
+                st.session_state.detected_lang     = ""
+                st.session_state.trl_result        = ""
+                st.session_state.tts_input         = ""
+                st.session_state.download_filename = "transkript.txt"
+                st.rerun()
+
+        if det_code:
+            st.markdown(
+                f'<div class="detected-lang">Detected: '
+                f'<strong>{det_label}</strong> &nbsp;·&nbsp; <code>{det_code}</code></div>',
+                unsafe_allow_html=True)
+
+        st.text_area("", st.session_state.transcript_text, height=400,
+                     label_visibility="collapsed", key="result_area")
+
+    else:
+        uploaded_file = st.file_uploader(
+            "",
+            label_visibility="collapsed")
+
+        if uploaded_file:
+            if st.button("Transcribe", use_container_width=True, key="do_transcribe"):
+                _lc = st.session_state.get("_lang_choice", "Auto detect")
+                _tc = st.session_state.get("_include_timecode", False)
+                try:
+                    result_text, dur, det_code, det_label = transcribe(
+                        uploaded_file.read(), uploaded_file.name, _lc, _tc)
+                    st.session_state.transcript_text   = result_text
+                    st.session_state.tts_input         = result_text
+                    st.session_state.detected_lang     = det_code
+                    st.session_state.trl_result        = ""
+                    base = os.path.splitext(uploaded_file.name)[0]
+                    tc_s = "_timecode" if _tc else ""
+                    st.session_state.download_filename = f"{base}_{det_code}{tc_s}.txt"
+                    st.rerun()
+                except requests.exceptions.HTTPError as e:
+                    st.error(f"HTTP error: {e.response.status_code} — {e.response.text}")
+                except Exception as e:
+                    st.error(f"Error: {str(e)}")
+
+        lang_choice = st.radio(
+            "Language",
+            ["Hrvatski", "English", "Auto detect"],
+            horizontal=True)
+        st.session_state["_lang_choice"] = lang_choice
+
+        timecode_option  = st.radio("Timecode", ["Off", "On"], horizontal=True)
+        include_timecode = timecode_option == "On"
+        st.session_state["_include_timecode"] = include_timecode
+
+        input_mode = st.radio("Source", ["Upload", "Rec"], horizontal=True)
+
+        if input_mode == "Rec":
+            st.components.v1.html(RECORDER_HTML, height=360)
+
+        if uploaded_file:
+            st.markdown(
+                f'<div class="status-box"><strong>{uploaded_file.name}</strong> '
+                f'— {lang_choice} — {uploaded_file.size//1024} KB</div>',
+                unsafe_allow_html=True)
+
+
+# ─────────────────────────────────────────────────────
+# TAB 2 — TRANSLATION
+# ─────────────────────────────────────────────────────
+with tab2:
+    det_code_trl   = st.session_state.get("detected_lang", "")
+    source_is_hr   = det_code_trl == "hr"
+    default_to_idx = 1 if source_is_hr else 0
+
+    trl_to = st.selectbox(
+        "Translate to",
+        list(LANGUAGE_MAP.keys()),
+        index=default_to_idx,
+        key="trl_to_sel")
+
+    # TOP ROW: Pull + Translate side by side
+    ca, cb = st.columns(2)
+    with ca:
+        if st.button("Pull", use_container_width=True, key="trl_pull"):
+            st.session_state["trl_input_area"] = st.session_state.transcript_text or ""
             st.rerun()
-        except requests.exceptions.HTTPError as e:
-            st.error(f"HTTP greška: {e.response.status_code} — {e.response.text}")
-        except Exception as e:
-            st.error(f"Greška: {str(e)}")
+    with cb:
+        do_translate = st.button("Translate", use_container_width=True, key="trl_btn")
 
-if st.session_state.transcript_text:
-    st.success("✅ Transkripcija završena!")
-    st.text_area("REZULTAT", st.session_state.transcript_text, height=300)
-    st.download_button(
-        label="⬇  PREUZMI TXT DATOTEKU",
-        data=st.session_state.transcript_text.encode("utf-8"),
-        file_name=st.session_state.download_filename,
-        mime="text/plain")
+    trl_input = st.text_area(
+        "",
+        value=st.session_state.get("trl_input_area", ""),
+        height=200,
+        key="trl_input_area",
+        label_visibility="collapsed",
+        placeholder="Pull from transcript or paste text here...")
 
-# ════════════════════════════════════════════════════════════════════════════
-# TTS READER
-# ════════════════════════════════════════════════════════════════════════════
-st.markdown("---")
-with st.expander("🔊  READ TRANSCRIPT — Edge Neural Voice",
-                 expanded=st.session_state.tts_open):
-    st.session_state.tts_open = True
-    gender = st.radio(
-        "Spol glasa", ["🚺 Female","🚹 Male"],
-        horizontal=True, label_visibility="collapsed", key="tts_gender")
-    selected_voice = VOICE_MAP.get(lang_label, VOICE_MAP["English"])[gender]
+    if do_translate:
+        text_to_translate = trl_input.strip()
+        if not text_to_translate:
+            st.warning("No text to translate.")
+        else:
+            from_code = det_code_trl if det_code_trl in CODE_TO_LABEL else "en"
+            to_code   = LANGUAGE_MAP[trl_to]
+            if from_code == to_code:
+                st.warning("Source and target language are the same.")
+            else:
+                with st.spinner(f"Translating to {trl_to}..."):
+                    try:
+                        result = translate_text(text_to_translate, from_code, to_code)
+                        st.session_state.trl_result = result
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Translation error: {e}")
+
+    if st.session_state.trl_result:
+        st.text_area("", st.session_state.trl_result,
+                     height=200, key="trl_result_area", label_visibility="collapsed")
+        st.download_button(
+            label="Download",
+            data=st.session_state.trl_result.encode("utf-8"),
+            file_name=f"translation_{det_code_trl or 'src'}_{LANGUAGE_MAP.get(trl_to,'xx')}.txt",
+            mime="text/plain",
+            use_container_width=True,
+            key="trl_download")
+
+
+# ─────────────────────────────────────────────────────
+# TAB 3 — TTS
+# ─────────────────────────────────────────────────────
+with tab3:
+    det_code_tts = st.session_state.get("detected_lang", "")
+    tts_detected = CODE_TO_LABEL.get(det_code_tts, "English") if det_code_tts else "English"
+    tts_lang_idx = list(VOICE_MAP.keys()).index(tts_detected) if tts_detected in VOICE_MAP else 1
+
+    # Pull buttons row
+    cp1, cp2 = st.columns(2)
+    with cp1:
+        if st.button("Pull transcript", use_container_width=True, key="tts_pull_tra"):
+            st.session_state["tts_text_area"] = st.session_state.transcript_text or ""
+            st.rerun()
+    with cp2:
+        if st.button("Pull translation", use_container_width=True, key="tts_pull_trl"):
+            st.session_state["tts_text_area"] = st.session_state.trl_result or ""
+            st.rerun()
+
+    tts_lang = st.radio(
+        "Language",
+        list(VOICE_MAP.keys()),
+        index=tts_lang_idx,
+        horizontal=True,
+        key="tts_lang_sel")
+
+    gender = st.radio("Voice", ["Female", "Male"], horizontal=True, key="tts_gender")
+    gender_key     = "🚺 Female" if gender == "Female" else "🚹 Male"
+    selected_voice = VOICE_MAP[tts_lang][gender_key]
     st.markdown(
-        f'<div style="font-family:monospace;font-size:10px;color:#444;margin-bottom:8px;">'
-        f'voice: {selected_voice} &nbsp;|&nbsp; jezik: {lang_label}</div>',
+        f'<div style="font-family:monospace;font-size:10px;color:#444;margin-bottom:6px;">'        f'voice: {selected_voice}</div>',
         unsafe_allow_html=True)
+
     tts_text = st.text_area(
-        "Tekst za čitanje:",
-        value=st.session_state.get("tts_input", st.session_state.transcript_text),
-        height=160, key="tts_text_area")
-    if st.button("🔊  GENERIRAJ GOVOR", key="tts_btn"):
+        "",
+        value=st.session_state.get("tts_text_area", ""),
+        height=180,
+        key="tts_text_area",
+        label_visibility="collapsed",
+        placeholder="Pull or paste text to read aloud...")
+
+    if st.button("Generate", use_container_width=True, key="tts_btn"):
         clean_text = tts_text.strip()
         if not clean_text:
-            st.warning("Nema teksta za čitanje.")
+            st.warning("No text.")
         elif len(clean_text) > 15000:
-            st.warning("Tekst je predugačak (max ~15 000 znakova).")
+            st.warning("Text too long (max ~15 000 chars).")
         else:
-            with st.spinner(f"Generiram govor — {selected_voice}..."):
+            with st.spinner(f"Generating — {selected_voice}..."):
                 try:
                     audio_data, word_boundaries = generate_tts(clean_text, selected_voice)
                     if not audio_data:
-                        st.error("Nije vraćen audio. Pokušaj ponovo.")
+                        st.error("No audio returned.")
                     else:
-                        
-                        
                         audio_b64   = base64.b64encode(audio_data).decode("utf-8")
                         player_html = build_tts_player(clean_text, audio_b64, word_boundaries)
                         st.components.v1.html(player_html, height=480, scrolling=False)
-
-                        safe_name = re.sub(r'[^a-z0-9]+', '_', lang_label.lower())
-                        tts_filename = f"tts_{safe_name}_{gender.split()[1].lower()}.mp3"
+                        safe_name    = re.sub(r'[^a-z0-9]+', '_', tts_lang.lower())
+                        tts_filename = f"tts_{safe_name}_{gender.lower()}.mp3"
                         st.download_button(
-                            label="⬇  PREUZMI AUDIO (MP3)",
+                            label="Download audio (MP3)",
                             data=audio_data,
                             file_name=tts_filename,
                             mime="audio/mpeg",
-                            key="tts_download"
-                        )                        
-                        
-                        
-                        
+                            key="tts_download")
                 except Exception as exc:
-                    st.error(f"TTS greška: {exc}")
+                    st.error(f"TTS error: {exc}")
 
-# ════════════════════════════════════════════════════════════════════════════
-# USAGE LOG
-# ════════════════════════════════════════════════════════════════════════════
-st.markdown("---")
-with st.expander(f"📋  USAGE LOG — {len(log_entries)} zapisa", expanded=False):
-    if not log_entries:
-        st.markdown(
-            "<span style='color:#555;font-family:monospace;font-size:12px;'>"
-            "Nema zapisa ili Google Sheet nije spojen.</span>",
-            unsafe_allow_html=True)
-    else:
-        for e in log_entries:
-            tag=e.get("tag","other"); owner=e.get("owner","")
-            preview_f=e.get("first_words",""); preview_l=e.get("last_words","")
-            preview=f"{preview_f} ... {preview_l}" if preview_f else "(nema teksta)"
-            loc=f"{e.get('city','')} {e.get('country','')}".strip()
-            dur_str=format_duration(e.get("duration_sec",0))
-            cost_str=f"${int(e.get('duration_sec',0))*RATE_PER_SEC:.4f}"
-            if tag=="nova":
-                tag_html='<span style="color:#00aaff;font-weight:700;">■ NOVA TV</span>'
-                border="#00aaff"
-            elif tag=="unknown":
-                tag_html='<span style="color:#ff6600;">■ NEPOZNATO</span>'
-                border="#ff6600"
-            else:
-                tag_html=f'<span style="color:#888;">■ {owner}</span>'
-                border="#333"
-            st.markdown(f"""
-<div style="background:#1e1e1e;border-left:3px solid {border};padding:8px 12px;
-            margin-bottom:6px;border-radius:4px;font-family:monospace;font-size:12px;">
-  <div style="display:flex;justify-content:space-between;margin-bottom:3px;">
-    <span style="color:#666;">{e.get('date','')} {e.get('time','')}</span>
-    <span style="color:#555;">⏱ {dur_str} · {cost_str}</span>
-    {tag_html}
-  </div>
-  <div style="color:#ccc;margin-bottom:3px;">"{preview}"</div>
-  <div style="color:#555;font-size:10px;">
-    🌐 {e.get('ip','?')} &nbsp;|&nbsp; 📍 {loc or '?'} &nbsp;|&nbsp;
-    🏢 {str(e.get('org','?'))[:40]}
-  </div>
-</div>""", unsafe_allow_html=True)
 
-# ════════════════════════════════════════════════════════════════════════════
-# SETTINGS
-# ════════════════════════════════════════════════════════════════════════════
-st.markdown("---")
-with st.expander("⚙️  SETTINGS", expanded=False):
-    if not st.session_state.admin_ok:
-        pw=st.text_input("Admin lozinka:", type="password", key="pw_input")
-        if st.button("Prijava", key="login_btn"):
-            if pw == ADMIN_PASSWORD:
-                st.session_state.admin_ok=True; st.rerun()
-            else:
-                st.error("Pogrešna lozinka.")
-    else:
-        st.success("✓ Prijavljen kao admin")
-        if st.button("Odjava", key="logout_btn"):
-            st.session_state.admin_ok=False; st.rerun()
-        st.markdown("---")
-        st.markdown("**Google Sheets**")
-        new_url=st.text_input("Google Sheet URL:", value=cfg["sheet_url"])
-        st.markdown("**Naziv aplikacije**")
-        new_title=st.text_input("App title:", value=cfg["app_title"])
-        st.markdown(
-            f'<div style="font-family:monospace;font-size:11px;color:#ff6600;margin:8px 0;">'
-            f'Potrošeno: ${used_dollars:.3f} &nbsp;|&nbsp; '
-            f'Preostalo: ${remaining_usd:.2f} &nbsp;|&nbsp; '
-            f'{remaining_hrs:.1f} h &nbsp;|&nbsp; {remaining_min:.0f} min</div>',
-            unsafe_allow_html=True)
-        col1,col2=st.columns(2)
-        with col1:
-            if st.button("💾  Spremi postavke"):
-                cfg["sheet_url"] = new_url
-                cfg["app_title"] = new_title
-                save_settings(cfg)
-                get_sheet.clear()
-                st.success("Spremljeno!"); st.rerun()
-        with col2:
-            if st.button("🗑  Obriši log", type="secondary"):
-                sheet_clear_log(); get_sheet.clear()
-                st.warning("Log obrisan."); st.rerun()
-        st.markdown("---")
-        st.markdown("**Status Google Sheets**")
-        if cfg["sheet_url"]:
-            ws=get_sheet(cfg["sheet_url"])
-            if ws: st.success(f"✓ Spojeno: `{ws.title}`")
-            else: st.error("✗ Nije moguće spojiti. Provjeri URL i Secrets.")
-        else:
-            st.warning("Sheet URL nije postavljen.")
+# ─────────────────────────────────────────────────────
+# TAB 4 — CRE  (Credits)
+# ─────────────────────────────────────────────────────
+with tab4:
+    st.markdown(f"""
+<div style="background:#111;border:1px solid #2a2a2a;border-radius:8px;padding:16px;">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+    <span style="font-family:monospace;font-size:11px;color:#555;letter-spacing:2px;">
+      ASSEMBLYAI · best model · auto detect · mono · $0.15/h
+    </span>
+    <span style="font-family:monospace;font-size:15px;color:{bar_color};font-weight:700;">
+      ${remaining_usd:.2f}
+    </span>
+  </div>
+  <div style="background:#1a1a1a;border-radius:4px;height:10px;overflow:hidden;margin-bottom:8px;">
+    <div style="width:{int(pct*100)}%;height:100%;background:{bar_color};border-radius:4px;"></div>
+  </div>
+  <div style="display:flex;justify-content:space-between;font-family:monospace;font-size:10px;color:#555;">
+    <span>used: ${used_dollars:.3f} of ${TOTAL_CREDITS:.2f}</span>
+    <span>time left: {time_left_str}</span>
+  </div>
+  <div style="margin-top:8px;font-family:monospace;font-size:10px;color:#444;text-align:right;">
+    credits never expire · stereo→mono auto
+  </div>
+</div>
+""", unsafe_allow_html=True)
