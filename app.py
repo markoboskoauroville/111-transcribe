@@ -366,6 +366,15 @@ st.markdown("""
   .detected-lang{background:#1a1a2e;border-left:3px solid #4466ff;padding:8px 14px;
     border-radius:4px;margin:8px 0;font-size:.85rem;color:#aab4ff;font-family:monospace;}
   .stExpander{border:1px solid #2a2a2a !important;border-radius:6px !important;}
+
+  /* ── Hide Streamlit chrome ── */
+  header[data-testid="stHeader"]    { display:none !important; }
+  [data-testid="stToolbar"]         { display:none !important; }
+  [data-testid="stDecoration"]      { display:none !important; }
+  [data-testid="stStatusWidget"]    { display:none !important; }
+  [data-testid="stMainMenuPopover"] { display:none !important; }
+  #MainMenu                         { display:none !important; }
+  footer                            { display:none !important; }
 </style>
 """, unsafe_allow_html=True)
 
