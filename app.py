@@ -341,7 +341,7 @@ function changeSpeed(){{audio.playbackRate=parseFloat(document.getElementById('s
 st.set_page_config(page_title=cfg["app_title"], page_icon="🎙️", layout="centered")
 st.markdown(
     '<div style="position:fixed;top:8px;right:12px;color:#555;font-size:11px;'
-    'z-index:9999;font-family:monospace;">v2.9</div>',
+    'z-index:9999;font-family:monospace;">v3.0</div>',
     unsafe_allow_html=True)
 
 st.markdown("""
@@ -399,6 +399,7 @@ for key, default in [
     ("_cached_file_size",   0),
     ("_last_lang_choice",  ""),
     ("_last_timecode",     False),
+    ("_tx_version",        0),
 ]:
     if key not in st.session_state:
         st.session_state[key] = default
@@ -847,9 +848,8 @@ with tab1:
             # Track settings used for this transcription
             st.session_state["_last_lang_choice"] = _lc
             st.session_state["_last_timecode"]     = _tc
-            # Force text area widget to show new content (widget state overrides value=)
-            st.session_state["result_area"]        = result_text
-            st.session_state["tts_text_area"]      = result_text
+            # Bump version → text area gets a fresh widget key → reads new value
+            st.session_state["_tx_version"] = st.session_state.get("_tx_version", 0) + 1
             st.rerun()
         except requests.exceptions.HTTPError as e:
             st.error(f"HTTP error: {e.response.status_code} — {e.response.text}")
@@ -924,7 +924,8 @@ setTimeout(function(){{m.style.display='none';}},2000);}}</script>"""
                 unsafe_allow_html=True)
 
         st.text_area("", st.session_state.transcript_text, height=360,
-                     label_visibility="collapsed", key="result_area")
+                     label_visibility="collapsed",
+                     key=f"result_area_{st.session_state.get('_tx_version', 0)}")
 
     # ─── UPLOAD VIEW (no transcript yet) ─────────────────────────────────────
     else:
