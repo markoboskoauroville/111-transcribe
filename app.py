@@ -341,7 +341,7 @@ function changeSpeed(){{audio.playbackRate=parseFloat(document.getElementById('s
 st.set_page_config(page_title=cfg["app_title"], page_icon="🎙️", layout="centered")
 st.markdown(
     '<div style="position:fixed;top:8px;right:12px;color:#555;font-size:11px;'
-    'z-index:9999;font-family:monospace;">v3.1</div>',
+    'z-index:9999;font-family:monospace;">v3.2</div>',
     unsafe_allow_html=True)
 
 st.markdown("""
@@ -989,18 +989,25 @@ setTimeout(function(){{m.style.display='none';}},2000);}}</script>"""
 
     # ─── UPLOAD VIEW (no transcript yet) ─────────────────────────────────────
     else:
-        uploaded_file = st.file_uploader(
+        # on_change callback fires the instant a file is selected — captures bytes
+        # immediately and reliably on Android, no dependence on rerun timing.
+        def _cache_uploaded_file():
+            f = st.session_state.get("file_uploader_widget")
+            if f is not None:
+                st.session_state["_cached_file_bytes"] = f.getvalue()
+                st.session_state["_cached_file_name"]  = f.name
+                st.session_state["_cached_file_size"]  = f.size
+
+        st.file_uploader(
             "",
             type=["mp3","mp4","m4a","wav","aac","ogg","flac","webm",
                   "mov","mxf","wma","opus","3gp","amr","mp2","mpga","mpeg"],
-            label_visibility="collapsed")
+            label_visibility="collapsed",
+            key="file_uploader_widget",
+            on_change=_cache_uploaded_file)
 
-        if uploaded_file is not None:
-            if st.session_state["_cached_file_name"] != uploaded_file.name:
-                st.session_state["_cached_file_bytes"] = uploaded_file.read()
-                st.session_state["_cached_file_name"]  = uploaded_file.name
-                st.session_state["_cached_file_size"]  = uploaded_file.size
-                has_cache = True
+        # Reflect cache state set by the callback
+        has_cache = bool(st.session_state.get("_cached_file_name"))
 
     # ─── SETTINGS (always visible — used by Transcribe AND Re-Transcribe) ─────
     lang_choice = st.radio("Language", ["Hrvatski", "English", "Auto detect"],
