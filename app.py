@@ -389,7 +389,11 @@ for key, default in [
     ("detected_lang",   ""),
     ("trl_result",      ""),
     ("trl_open",        False),
-    ("copy_triggered",  False),
+    ("copy_triggered",   False),
+    ("subtitle_segments", []),
+    ("trl_segments",     []),
+    ("fps",                25),
+    ("ext_lang_choice",  ""),
 ]:
     if key not in st.session_state:
         st.session_state[key] = default
@@ -399,6 +403,26 @@ for key, default in [
 # ════════════════════════════════════════════════════════════════════════════
 LANGUAGE_MAP = {"Hrvatski":"hr","English":"en","Italiano":"it","Deutsch":"de","Français":"fr"}
 CODE_TO_LABEL = {v: k for k, v in LANGUAGE_MAP.items()}
+
+# Full language list for advanced use
+EXTENDED_LANGUAGE_MAP = {
+    "Afrikaans":"af","Albanian":"sq","Amharic":"am","Arabic":"ar",
+    "Armenian":"hy","Azerbaijani":"az","Basque":"eu","Bengali":"bn",
+    "Bosnian":"bs","Bulgarian":"bg","Catalan":"ca","Chinese (Simplified)":"zh",
+    "Chinese (Traditional)":"zh-TW","Croatian":"hr","Czech":"cs","Danish":"da",
+    "Dutch":"nl","English":"en","Estonian":"et","Finnish":"fi","French":"fr",
+    "Galician":"gl","German":"de","Greek":"el","Gujarati":"gu","Hebrew":"he",
+    "Hindi":"hi","Hungarian":"hu","Icelandic":"is","Indonesian":"id",
+    "Italian":"it","Japanese":"ja","Kannada":"kn","Kazakh":"kk","Korean":"ko",
+    "Latvian":"lv","Lithuanian":"lt","Macedonian":"mk","Malay":"ms",
+    "Maltese":"mt","Marathi":"mr","Mongolian":"mn","Nepali":"ne",
+    "Norwegian":"no","Pashto":"ps","Persian":"fa","Polish":"pl",
+    "Portuguese":"pt","Punjabi":"pa","Romanian":"ro","Russian":"ru",
+    "Serbian":"sr","Slovak":"sk","Slovenian":"sl","Somali":"so",
+    "Spanish":"es","Swahili":"sw","Swedish":"sv","Tagalog":"tl",
+    "Tamil":"ta","Telugu":"te","Thai":"th","Turkish":"tr","Ukrainian":"uk",
+    "Urdu":"ur","Uzbek":"uz","Vietnamese":"vi","Welsh":"cy","Zulu":"zu",
+}
 
 # ════════════════════════════════════════════════════════════════════════════
 # USAGE STATS
@@ -645,6 +669,9 @@ def transcribe(audio_bytes, filename="audio", lang_choice="Auto detect", include
     if cfg["sheet_url"]:
         sheet_append(entry)
 
+    # Generate subtitle segments from word timestamps
+    st.session_state.subtitle_segments = words_to_subtitles(poll.get("words", []))
+    st.session_state["audio_duration_ms"] = int(poll.get("audio_duration", 0)) * 1000
     return result_text, duration_sec, detected_code, detected_label
 
 def translate_text(text, from_code, to_code):
@@ -663,6 +690,126 @@ def translate_text(text, from_code, to_code):
     return data["responseData"]["translatedText"]
 
 
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# SUBTITLE HELPERS
+# ════════════════════════════════════════════════════════════════════════════
+def ms_to_srt_time(ms):
+    ms = int(ms)
+    h, ms = divmod(ms, 3600000)
+    m, ms = divmod(ms, 60000)
+    s, ms = divmod(ms, 1000)
+    return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
+
+def ms_to_avid_time(ms, fps=25):
+    total_f = round(int(ms) * fps / 1000)
+    h, r = divmod(total_f, fps * 3600)
+    m, r = divmod(r, fps * 60)
+    s, f = divmod(r, fps)
+    return f"{h:02d}:{m:02d}:{s:02d}:{f:02d}"
+
+def words_to_subtitles(words, max_chars=72, max_dur_ms=5500):
+    if not words:
+        return []
+    segs, cur, cur_start, cur_chars = [], [], None, 0
+    for w in words:
+        txt, ws, we = w["text"], w["start"], w["end"]
+        if cur_start is None:
+            cur_start = ws
+        new_chars = cur_chars + len(txt) + (1 if cur_chars else 0)
+        if (new_chars > max_chars or we - cur_start > max_dur_ms) and cur:
+            segs.append({"start": cur_start, "end": cur[-1]["end"],
+                         "text": " ".join(x["text"] for x in cur)})
+            cur, cur_start, cur_chars = [w], ws, len(txt)
+        else:
+            cur.append(w); cur_chars = new_chars
+    if cur:
+        segs.append({"start": cur_start, "end": cur[-1]["end"],
+                     "text": " ".join(x["text"] for x in cur)})
+    return segs
+
+def subtitles_to_srt(segs):
+    out = []
+    for i, s in enumerate(segs, 1):
+        out += [str(i),
+                f"{ms_to_srt_time(s['start'])} --> {ms_to_srt_time(s['end'])}",
+                s["text"], ""]
+    return "\n".join(out)
+
+def subtitles_to_avid(segs, fps=25):
+    out = ["<begin subtitles>", ""]
+    for s in segs:
+        out.append(f"{ms_to_avid_time(s['start'], fps)} {ms_to_avid_time(s['end'], fps)}")
+        text = s["text"]
+        if len(text) > 40:
+            mid = len(text) // 2
+            sp  = text.rfind(" ", 0, mid + 15) or mid
+            out += [text[:sp], text[sp+1:], ""]
+        else:
+            out += [text, ""]
+    out.append("<end subtitles>")
+    return "\n".join(out)
+
+def translate_subtitle_segments(segs, from_code, to_code):
+    result = []
+    for s in segs:
+        try:
+            t = translate_text(s["text"], from_code, to_code)
+        except:
+            t = s["text"]
+        result.append({"start": s["start"], "end": s["end"], "text": t})
+    return result
+
+def generate_timed_tts_audio(segs, voice, total_ms):
+    """Generate dubbed audio: TTS per subtitle placed at original timestamps via ffmpeg."""
+    if not segs:
+        return None
+    temp_segs, base_tmp, out_tmp = [], None, None
+    try:
+        for seg in segs:
+            audio_data, _ = generate_tts(seg["text"], voice)
+            f = tempfile.NamedTemporaryFile(suffix=".mp3", delete=False)
+            f.write(audio_data); f.close()
+            temp_segs.append((f.name, int(seg["start"])))
+
+        base_tmp = tempfile.mktemp(suffix=".mp3")
+        subprocess.run([
+            "ffmpeg", "-y", "-f", "lavfi",
+            "-i", "anullsrc=channel_layout=mono:sample_rate=24000",
+            "-t", str(max(total_ms / 1000.0, 1)), "-q:a", "9", base_tmp
+        ], capture_output=True, check=True)
+
+        inputs = ["-i", base_tmp]
+        for seg_file, _ in temp_segs:
+            inputs += ["-i", seg_file]
+
+        filt, mix = [], "[0:a]"
+        for i, (_, start_ms) in enumerate(temp_segs):
+            filt.append(f"[{i+1}:a]adelay={start_ms}|{start_ms}[d{i}]")
+            mix += f"[d{i}]"
+        n = len(temp_segs) + 1
+        filt.append(f"{mix}amix=inputs={n}:duration=first:normalize=0[out]")
+
+        out_tmp = tempfile.mktemp(suffix=".mp3")
+        r = subprocess.run(
+            ["ffmpeg", "-y"] + inputs +
+            ["-filter_complex", ";".join(filt), "-map", "[out]", "-q:a", "4", out_tmp],
+            capture_output=True)
+        if r.returncode == 0:
+            return open(out_tmp, "rb").read()
+    except Exception as e:
+        st.error(f"Timed TTS error: {e}")
+    finally:
+        for f, _ in temp_segs:
+            try: os.unlink(f)
+            except: pass
+        for tmp in [base_tmp, out_tmp]:
+            if tmp:
+                try: os.unlink(tmp)
+                except: pass
+    return None
+
 # ════════════════════════════════════════════════════════════════════════════
 # 3-TAB LAYOUT
 # ════════════════════════════════════════════════════════════════════════════
@@ -670,84 +817,79 @@ tab1, tab2, tab3, tab4 = st.tabs(["Transcript", "Translation", "TTS", "CRE"])
 
 
 # ─────────────────────────────────────────────────────
-# TAB 1 — TRANSCRIPT  (unchanged)
+# TAB 1 — TRANSCRIPT
 # ─────────────────────────────────────────────────────
 with tab1:
-
     has_transcript = bool(st.session_state.transcript_text)
 
     if has_transcript:
         det_code  = st.session_state.detected_lang
         det_label = CODE_TO_LABEL.get(det_code, det_code.upper()) if det_code else ""
+        segs      = st.session_state.subtitle_segments
+        fps       = st.session_state.fps
+        total_ms  = st.session_state.get("audio_duration_ms", 0)
 
+        # ROW 1: Download | Copy | New
         c1, c2, c3 = st.columns(3)
         with c1:
-            st.download_button(
-                label="Download",
-                data=st.session_state.transcript_text.encode("utf-8"),
-                file_name=st.session_state.download_filename,
-                mime="text/plain",
-                use_container_width=True,
-                key="dl_top")
+            st.download_button("Download", data=st.session_state.transcript_text.encode(),
+                file_name=st.session_state.download_filename, mime="text/plain",
+                use_container_width=True, key="dl_top")
         with c2:
-            _copy_html = f"""<style>
-body{{margin:0;padding:0;background:transparent;}}
+            _ch = f"""<style>body{{margin:0;background:transparent;}}
 .cp{{background:#ff6600;color:#000;font-weight:700;border:none;border-radius:4px;
      padding:7px 0;font-size:.85rem;letter-spacing:.5px;text-transform:uppercase;
-     cursor:pointer;width:100%;display:block;}}
-.cp:active{{background:#cc5200;}}
+     cursor:pointer;width:100%;display:block;}}.cp:active{{background:#cc5200;}}
 #msg{{color:#44cc88;font-family:monospace;font-size:11px;padding:2px 0;display:none;text-align:center;}}
-</style>
-<button class="cp" onclick="doCopy()">COPY</button>
-<div id="msg">✓ Copied</div>
-<script>
-function doCopy(){{
-  var t={json.dumps(st.session_state.transcript_text)};
-  var ok=false;
-  try{{
-    var ta=document.createElement('textarea');
-    ta.value=t; ta.setAttribute('readonly','');
-    ta.style.cssText='position:absolute;left:-9999px;top:0;opacity:0;';
-    document.body.appendChild(ta);
-    if(/ipad|iphone/i.test(navigator.userAgent)){{
-      var rng=document.createRange(); rng.selectNodeContents(ta);
-      var sel=window.getSelection(); sel.removeAllRanges(); sel.addRange(rng);
-      ta.setSelectionRange(0,999999);
-    }}else{{ta.select();}}
-    ok=document.execCommand('copy');
-    document.body.removeChild(ta);
-  }}catch(e){{}}
-  if(!ok&&navigator.clipboard&&navigator.clipboard.writeText){{
-    navigator.clipboard.writeText(t).catch(function(){{}});ok=true;
-  }}
-  var m=document.getElementById('msg');
-  m.style.display='block';
-  setTimeout(function(){{m.style.display='none';}},2000);
-}}
-</script>"""
-            st.components.v1.html(_copy_html, height=52)
+</style><button class="cp" onclick="doCopy()">COPY</button><div id="msg">✓ Copied</div>
+<script>function doCopy(){{var t={json.dumps(st.session_state.transcript_text)};var ok=false;
+try{{var a=document.createElement('textarea');a.value=t;a.setAttribute('readonly','');
+a.style.cssText='position:absolute;left:-9999px;top:0;opacity:0;';document.body.appendChild(a);
+if(/ipad|iphone/i.test(navigator.userAgent)){{var rng=document.createRange();rng.selectNodeContents(a);
+var sel=window.getSelection();sel.removeAllRanges();sel.addRange(rng);a.setSelectionRange(0,999999);}}
+else{{a.select();}}ok=document.execCommand('copy');document.body.removeChild(a);}}catch(e){{}}
+if(!ok&&navigator.clipboard)navigator.clipboard.writeText(t).catch(function(){{}});
+var m=document.getElementById('msg');m.style.display='block';
+setTimeout(function(){{m.style.display='none';}},2000);}}</script>"""
+            st.components.v1.html(_ch, height=52)
         with c3:
             if st.button("New", use_container_width=True, key="new_session"):
-                st.session_state.transcript_text   = ""
-                st.session_state.detected_lang     = ""
-                st.session_state.trl_result        = ""
-                st.session_state.tts_input         = ""
+                for k in ["transcript_text","detected_lang","trl_result","tts_input",
+                          "subtitle_segments","trl_segments","audio_duration_ms"]:
+                    st.session_state[k] = [] if k in ["subtitle_segments","trl_segments"] else ""
                 st.session_state.download_filename = "transkript.txt"
                 st.rerun()
 
+        # ROW 2: SRT | Avid (only if subtitles available)
+        if segs:
+            c4, c5, c6 = st.columns(3)
+            with c4:
+                fps_val = st.selectbox("FPS", [23, 24, 25, 30], index=2,
+                                       key="fps_sel", label_visibility="collapsed")
+                st.session_state.fps = fps_val
+            with c5:
+                st.download_button("SRT",
+                    data=subtitles_to_srt(segs).encode("utf-8"),
+                    file_name=f"{st.session_state.download_filename.replace('.txt','')}.srt",
+                    mime="text/plain", use_container_width=True, key="dl_srt")
+            with c6:
+                st.download_button("Avid",
+                    data=subtitles_to_avid(segs, fps_val).encode("utf-8"),
+                    file_name=f"{st.session_state.download_filename.replace('.txt','')}.txt",
+                    mime="text/plain", use_container_width=True, key="dl_avid")
+
         if det_code:
             st.markdown(
-                f'<div class="detected-lang">Detected: '
-                f'<strong>{det_label}</strong> &nbsp;·&nbsp; <code>{det_code}</code></div>',
+                f'<div class="detected-lang">Detected: <strong>{det_label}</strong>'
+                f' &nbsp;·&nbsp; <code>{det_code}</code></div>',
                 unsafe_allow_html=True)
 
-        st.text_area("", st.session_state.transcript_text, height=400,
+        st.text_area("", st.session_state.transcript_text, height=360,
                      label_visibility="collapsed", key="result_area")
 
     else:
-        uploaded_file = st.file_uploader(
-            "",
-            label_visibility="collapsed")
+        # ── UPLOAD / TRANSCRIBE VIEW ─────────────────
+        uploaded_file = st.file_uploader("", label_visibility="collapsed")
 
         if uploaded_file:
             if st.button("Transcribe", use_container_width=True, key="do_transcribe"):
@@ -760,6 +902,7 @@ function doCopy(){{
                     st.session_state.tts_input         = result_text
                     st.session_state.detected_lang     = det_code
                     st.session_state.trl_result        = ""
+                    st.session_state.trl_segments      = []
                     base = os.path.splitext(uploaded_file.name)[0]
                     tc_s = "_timecode" if _tc else ""
                     st.session_state.download_filename = f"{base}_{det_code}{tc_s}.txt"
@@ -769,87 +912,119 @@ function doCopy(){{
                 except Exception as e:
                     st.error(f"Error: {str(e)}")
 
-        lang_choice = st.radio(
-            "Language",
-            ["Hrvatski", "English", "Auto detect"],
-            horizontal=True)
+        # Primary language
+        lang_choice = st.radio("Language", ["Hrvatski", "English", "Auto detect"],
+                               horizontal=True)
         st.session_state["_lang_choice"] = lang_choice
 
-        timecode_option  = st.radio("Timecode", ["Off", "On"], horizontal=True)
-        include_timecode = timecode_option == "On"
-        st.session_state["_include_timecode"] = include_timecode
+        tc_opt = st.radio("Timecode", ["Off", "On"], horizontal=True)
+        st.session_state["_include_timecode"] = tc_opt == "On"
 
         input_mode = st.radio("Source", ["Upload", "Rec"], horizontal=True)
-
         if input_mode == "Rec":
             st.components.v1.html(RECORDER_HTML, height=360)
 
         if uploaded_file:
             st.markdown(
-                f'<div class="status-box"><strong>{uploaded_file.name}</strong> '
-                f'— {lang_choice} — {uploaded_file.size//1024} KB</div>',
+                f'<div class="status-box"><strong>{uploaded_file.name}</strong>'
+                f' — {lang_choice} — {uploaded_file.size//1024} KB</div>',
                 unsafe_allow_html=True)
+
+        # ── EXPANDED LANGUAGE LIST ────────────────────
+        with st.expander("All languages (advanced)", expanded=False):
+            ext_lang = st.selectbox(
+                "Select any language for transcription",
+                ["— use primary selector above —"] + sorted(EXTENDED_LANGUAGE_MAP.keys()),
+                key="ext_lang_sel")
+            if ext_lang != "— use primary selector above —":
+                st.session_state["_lang_choice"] = ext_lang
+                st.info(f"Set to: {ext_lang} ({EXTENDED_LANGUAGE_MAP.get(ext_lang,'')})")
 
 
 # ─────────────────────────────────────────────────────
 # TAB 2 — TRANSLATION
 # ─────────────────────────────────────────────────────
 with tab2:
-    det_code_trl   = st.session_state.get("detected_lang", "")
-    source_is_hr   = det_code_trl == "hr"
-    default_to_idx = 1 if source_is_hr else 0
+    det_code_trl  = st.session_state.get("detected_lang", "")
+    source_is_hr  = det_code_trl == "hr"
+    def_to_idx    = 1 if source_is_hr else 0
+    from_code_trl = det_code_trl if det_code_trl in CODE_TO_LABEL else "en"
 
-    trl_to = st.selectbox(
-        "Translate to",
-        list(LANGUAGE_MAP.keys()),
-        index=default_to_idx,
-        key="trl_to_sel")
+    trl_to = st.selectbox("Translate to", list(LANGUAGE_MAP.keys()),
+                          index=def_to_idx, key="trl_to_sel")
 
-    # TOP ROW: Pull + Translate side by side
+    # Expanded target language
+    with st.expander("More target languages", expanded=False):
+        ext_trl_to = st.selectbox("Any language",
+            ["— use above —"] + sorted(EXTENDED_LANGUAGE_MAP.keys()),
+            key="ext_trl_to_sel")
+        if ext_trl_to != "— use above —":
+            trl_to = ext_trl_to
+
     ca, cb = st.columns(2)
     with ca:
         if st.button("Pull", use_container_width=True, key="trl_pull"):
             st.session_state["trl_input_area"] = st.session_state.transcript_text or ""
+            st.session_state.trl_segments      = []
             st.rerun()
     with cb:
         do_translate = st.button("Translate", use_container_width=True, key="trl_btn")
 
-    trl_input = st.text_area(
-        "",
-        value=st.session_state.get("trl_input_area", ""),
-        height=200,
-        key="trl_input_area",
-        label_visibility="collapsed",
-        placeholder="Pull from transcript or paste text here...")
+    trl_input = st.text_area("", value=st.session_state.get("trl_input_area", ""),
+                             height=180, key="trl_input_area",
+                             label_visibility="collapsed",
+                             placeholder="Pull from transcript or paste text here...")
 
     if do_translate:
         text_to_translate = trl_input.strip()
         if not text_to_translate:
             st.warning("No text to translate.")
         else:
-            from_code = det_code_trl if det_code_trl in CODE_TO_LABEL else "en"
-            to_code   = LANGUAGE_MAP[trl_to]
-            if from_code == to_code:
+            to_code = (EXTENDED_LANGUAGE_MAP.get(trl_to)
+                       if trl_to in EXTENDED_LANGUAGE_MAP
+                       else LANGUAGE_MAP.get(trl_to, "en"))
+            if from_code_trl == to_code:
                 st.warning("Source and target language are the same.")
             else:
                 with st.spinner(f"Translating to {trl_to}..."):
                     try:
-                        result = translate_text(text_to_translate, from_code, to_code)
+                        result = translate_text(text_to_translate, from_code_trl, to_code)
                         st.session_state.trl_result = result
+                        # Also translate subtitle segments if available
+                        src_segs = st.session_state.subtitle_segments
+                        if src_segs:
+                            with st.spinner("Translating subtitles..."):
+                                st.session_state.trl_segments = translate_subtitle_segments(
+                                    src_segs, from_code_trl, to_code)
                         st.rerun()
                     except Exception as e:
                         st.error(f"Translation error: {e}")
 
     if st.session_state.trl_result:
-        st.text_area("", st.session_state.trl_result,
-                     height=200, key="trl_result_area", label_visibility="collapsed")
-        st.download_button(
-            label="Download",
-            data=st.session_state.trl_result.encode("utf-8"),
-            file_name=f"translation_{det_code_trl or 'src'}_{LANGUAGE_MAP.get(trl_to,'xx')}.txt",
-            mime="text/plain",
-            use_container_width=True,
-            key="trl_download")
+        to_code_val = (EXTENDED_LANGUAGE_MAP.get(trl_to)
+                       or LANGUAGE_MAP.get(trl_to, "xx"))
+        fname_base  = f"translation_{from_code_trl}_{to_code_val}"
+        fps_t       = st.session_state.fps
+
+        st.text_area("", st.session_state.trl_result, height=180,
+                     key="trl_result_area", label_visibility="collapsed")
+
+        # Download row: text + SRT + Avid
+        d1, d2, d3 = st.columns(3)
+        with d1:
+            st.download_button("Download", use_container_width=True,
+                data=st.session_state.trl_result.encode("utf-8"),
+                file_name=f"{fname_base}.txt", mime="text/plain", key="trl_dl_txt")
+        trl_segs = st.session_state.trl_segments
+        if trl_segs:
+            with d2:
+                st.download_button("SRT", use_container_width=True,
+                    data=subtitles_to_srt(trl_segs).encode("utf-8"),
+                    file_name=f"{fname_base}.srt", mime="text/plain", key="trl_dl_srt")
+            with d3:
+                st.download_button("Avid", use_container_width=True,
+                    data=subtitles_to_avid(trl_segs, fps_t).encode("utf-8"),
+                    file_name=f"{fname_base}_avid.txt", mime="text/plain", key="trl_dl_avid")
 
 
 # ─────────────────────────────────────────────────────
@@ -860,7 +1035,6 @@ with tab3:
     tts_detected = CODE_TO_LABEL.get(det_code_tts, "English") if det_code_tts else "English"
     tts_lang_idx = list(VOICE_MAP.keys()).index(tts_detected) if tts_detected in VOICE_MAP else 1
 
-    # Pull buttons row
     cp1, cp2 = st.columns(2)
     with cp1:
         if st.button("Pull transcript", use_container_width=True, key="tts_pull_tra"):
@@ -871,78 +1045,95 @@ with tab3:
             st.session_state["tts_text_area"] = st.session_state.trl_result or ""
             st.rerun()
 
-    tts_lang = st.radio(
-        "Language",
-        list(VOICE_MAP.keys()),
-        index=tts_lang_idx,
-        horizontal=True,
-        key="tts_lang_sel")
-
+    tts_lang = st.radio("Language", list(VOICE_MAP.keys()), index=tts_lang_idx,
+                        horizontal=True, key="tts_lang_sel")
     gender = st.radio("Voice", ["Female", "Male"], horizontal=True, key="tts_gender")
     gender_key     = "🚺 Female" if gender == "Female" else "🚹 Male"
     selected_voice = VOICE_MAP[tts_lang][gender_key]
-    st.markdown(
-        f'<div style="font-family:monospace;font-size:10px;color:#444;margin-bottom:6px;">'        f'voice: {selected_voice}</div>',
-        unsafe_allow_html=True)
+    st.markdown(f'<div style="font-family:monospace;font-size:10px;color:#444;'
+                f'margin-bottom:6px;">voice: {selected_voice}</div>',
+                unsafe_allow_html=True)
 
-    tts_text = st.text_area(
-        "",
-        value=st.session_state.get("tts_text_area", ""),
-        height=180,
-        key="tts_text_area",
-        label_visibility="collapsed",
-        placeholder="Pull or paste text to read aloud...")
+    tts_text = st.text_area("", value=st.session_state.get("tts_text_area",""),
+                            height=150, key="tts_text_area",
+                            label_visibility="collapsed",
+                            placeholder="Pull or paste text to read aloud...")
 
+    # Standard TTS
     if st.button("Generate", use_container_width=True, key="tts_btn"):
-        clean_text = tts_text.strip()
-        if not clean_text:
+        clean = tts_text.strip()
+        if not clean:
             st.warning("No text.")
-        elif len(clean_text) > 15000:
-            st.warning("Text too long (max ~15 000 chars).")
+        elif len(clean) > 15000:
+            st.warning("Text too long (max 15 000 chars).")
         else:
             with st.spinner(f"Generating — {selected_voice}..."):
                 try:
-                    audio_data, word_boundaries = generate_tts(clean_text, selected_voice)
-                    if not audio_data:
-                        st.error("No audio returned.")
-                    else:
-                        audio_b64   = base64.b64encode(audio_data).decode("utf-8")
-                        player_html = build_tts_player(clean_text, audio_b64, word_boundaries)
-                        st.components.v1.html(player_html, height=480, scrolling=False)
-                        safe_name    = re.sub(r'[^a-z0-9]+', '_', tts_lang.lower())
-                        tts_filename = f"tts_{safe_name}_{gender.lower()}.mp3"
-                        st.download_button(
-                            label="Download audio (MP3)",
-                            data=audio_data,
-                            file_name=tts_filename,
-                            mime="audio/mpeg",
-                            key="tts_download")
+                    audio_data, wbs = generate_tts(clean, selected_voice)
+                    if audio_data:
+                        st.components.v1.html(
+                            build_tts_player(clean, base64.b64encode(audio_data).decode(), wbs),
+                            height=480, scrolling=False)
+                        safe = re.sub(r'[^a-z0-9]+','_', tts_lang.lower())
+                        st.download_button("Download audio (MP3)", data=audio_data,
+                            file_name=f"tts_{safe}_{gender.lower()}.mp3",
+                            mime="audio/mpeg", key="tts_download")
                 except Exception as exc:
                     st.error(f"TTS error: {exc}")
 
+    # Timed TTS (dubbed audio)
+    st.markdown("---")
+    st.markdown('<div style="font-family:monospace;font-size:11px;color:#555;'
+                'letter-spacing:1px;margin-bottom:8px;">TIMED TTS — dubbed audio at original timestamps</div>',
+                unsafe_allow_html=True)
+
+    timed_segs = st.session_state.trl_segments or st.session_state.subtitle_segments
+    if not timed_segs:
+        st.markdown('<div style="color:#333;font-family:monospace;font-size:12px;">'
+                    'No subtitle segments yet — transcribe audio first, then optionally translate.</div>',
+                    unsafe_allow_html=True)
+    else:
+        total_ms = st.session_state.get("audio_duration_ms", 0)
+        st.markdown(
+            f'<div style="font-family:monospace;font-size:11px;color:#555;">'
+            f'{len(timed_segs)} segments · {total_ms//1000}s total</div>',
+            unsafe_allow_html=True)
+        source_label = "translated" if st.session_state.trl_segments else "original"
+        btn_label = "Generate timed audio (" + source_label + " · " + selected_voice.split("-")[0] + ")"
+        if st.button(btn_label, use_container_width=True, key="tts_timed_btn"):
+            with st.spinner(f"Generating {len(timed_segs)} segments and assembling..."):
+                try:
+                    dub_audio = generate_timed_tts_audio(timed_segs, selected_voice, total_ms)
+                    if dub_audio:
+                        st.success(f"Timed audio ready — {len(dub_audio)//1024} KB")
+                        safe = re.sub(r'[^a-z0-9]+','_', tts_lang.lower())
+                        st.download_button("Download dubbed audio (MP3)", data=dub_audio,
+                            file_name=f"dubbed_{safe}_{gender.lower()}.mp3",
+                            mime="audio/mpeg", key="tts_timed_dl")
+                    else:
+                        st.error("Assembly failed.")
+                except Exception as exc:
+                    st.error(f"Error: {exc}")
+
 
 # ─────────────────────────────────────────────────────
-# TAB 4 — CRE  (Credits)
+# TAB 4 — CRE
 # ─────────────────────────────────────────────────────
 with tab4:
-    # Load any saved real balance from settings
     real_balance = cfg.get("real_balance", None)
-
-    # If user has entered a real balance, calculate correction offset
     if real_balance is not None:
-        offset       = real_balance - remaining_usd
-        display_usd  = real_balance
-        display_used = TOTAL_CREDITS - real_balance
+        display_usd = real_balance
+        offset      = real_balance - remaining_usd
     else:
-        offset       = 0.0
-        display_usd  = remaining_usd
-        display_used = used_dollars
+        display_usd = remaining_usd
+        offset      = 0.0
 
-    display_hrs  = display_usd / 0.15
-    display_min  = display_hrs * 60
-    display_pct  = min(1.0, (TOTAL_CREDITS - display_usd) / TOTAL_CREDITS)
-    disp_color   = "#44cc88" if display_pct < 0.7 else "#ffaa00" if display_pct < 0.9 else "#ff4444"
-    disp_time    = f"{display_hrs:.1f} h  ({display_min:.0f} min)" if display_hrs >= 1.0 else f"{display_min:.0f} min"
+    display_pct   = min(1.0, (TOTAL_CREDITS - display_usd) / TOTAL_CREDITS)
+    display_hrs   = display_usd / 0.15
+    display_min   = display_hrs * 60
+    disp_color    = "#44cc88" if display_pct < 0.7 else "#ffaa00" if display_pct < 0.9 else "#ff4444"
+    disp_time     = (f"{display_hrs:.1f} h  ({display_min:.0f} min)"
+                     if display_hrs >= 1.0 else f"{display_min:.0f} min")
 
     st.markdown(f"""
 <div style="background:#111;border:1px solid #2a2a2a;border-radius:8px;padding:16px;margin-bottom:14px;">
@@ -958,37 +1149,28 @@ with tab4:
     <div style="width:{int(display_pct*100)}%;height:100%;background:{disp_color};border-radius:4px;"></div>
   </div>
   <div style="display:flex;justify-content:space-between;font-family:monospace;font-size:10px;color:#555;">
-    <span>sheet estimate: ${remaining_usd:.3f} remaining</span>
+    <span>sheet estimate: ${remaining_usd:.3f}</span>
     <span>time left: {disp_time}</span>
   </div>
   {"" if real_balance is None else f'<div style="font-family:monospace;font-size:10px;color:#4a9;margin-top:4px;">✓ calibrated · offset {offset:+.3f}</div>'}
 </div>
 """, unsafe_allow_html=True)
 
-    st.markdown(
-        '<div style="font-family:monospace;font-size:11px;color:#555;margin-bottom:6px;">'        'Calibrate — enter real balance from AssemblyAI dashboard:</div>',
-        unsafe_allow_html=True)
-
+    st.markdown('<div style="font-family:monospace;font-size:11px;color:#555;margin-bottom:6px;">'
+                'Calibrate — enter real balance from AssemblyAI dashboard:</div>',
+                unsafe_allow_html=True)
     col_bal, col_set = st.columns([3, 1])
     with col_bal:
-        bal_input = st.number_input(
-            "Real balance ($)",
-            min_value=0.0, max_value=500.0,
+        bal_input = st.number_input("", min_value=0.0, max_value=500.0,
             value=float(real_balance) if real_balance is not None else remaining_usd,
-            step=0.01, format="%.2f",
-            label_visibility="collapsed",
-            key="real_balance_input")
+            step=0.01, format="%.2f", label_visibility="collapsed", key="real_balance_input")
     with col_set:
         if st.button("Set", use_container_width=True, key="set_balance_btn"):
             cfg["real_balance"] = round(bal_input, 4)
             save_settings(cfg)
             st.success(f"Calibrated to ${bal_input:.2f}")
             st.rerun()
-
     if real_balance is not None:
-        st.markdown(
-            f'<div style="font-family:monospace;font-size:10px;color:#555;margin-top:4px;">'            f'Sheet estimate was ${remaining_usd:.3f} · real was ${real_balance:.3f} '            f'· offset applied: {offset:+.3f}</div>',
-            unsafe_allow_html=True)
         if st.button("Clear calibration", key="clear_cal"):
             cfg.pop("real_balance", None)
             save_settings(cfg)
