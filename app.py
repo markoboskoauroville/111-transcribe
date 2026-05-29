@@ -341,7 +341,7 @@ function changeSpeed(){{audio.playbackRate=parseFloat(document.getElementById('s
 st.set_page_config(page_title=cfg["app_title"], page_icon="🎙️", layout="centered")
 st.markdown(
     '<div style="position:fixed;top:8px;right:12px;color:#555;font-size:11px;'
-    'z-index:9999;font-family:monospace;">v3.0</div>',
+    'z-index:9999;font-family:monospace;">v3.1</div>',
     unsafe_allow_html=True)
 
 st.markdown("""
@@ -400,6 +400,8 @@ for key, default in [
     ("_last_lang_choice",  ""),
     ("_last_timecode",     False),
     ("_tx_version",        0),
+    ("tts_chunks",         []),
+    ("tts_chunk_voice",    ""),
 ]:
     if key not in st.session_state:
         st.session_state[key] = default
@@ -816,6 +818,64 @@ def generate_timed_tts_audio(segs, voice, total_ms):
                 except: pass
     return None
 
+
+def strip_timecodes(text):
+    """Remove [HH:MM:SS.ff] timecode markers so they are not spoken."""
+    text = re.sub(r"\[\d{2}:\d{2}:\d{2}[.,]\d{2,3}\]", "", text)
+    return re.sub(r"[ \t]+", " ", text).strip()
+
+def split_text_chunks(text, max_chars=3000):
+    """Split clean text into chunks under max_chars at sentence boundaries."""
+    text = strip_timecodes(text)
+    if not text:
+        return []
+    sentences = re.split(r"(?<=[.!?])\s+", text)
+    chunks, cur = [], ""
+    for sent in sentences:
+        while len(sent) > max_chars:
+            chunks.append(sent[:max_chars]); sent = sent[max_chars:]
+        if len(cur) + len(sent) + 1 > max_chars and cur:
+            chunks.append(cur.strip()); cur = sent
+        else:
+            cur = (cur + " " + sent).strip()
+    if cur:
+        chunks.append(cur.strip())
+    return chunks
+
+def join_audio_chunks(audio_list):
+    """Concatenate multiple MP3 byte blobs into one via ffmpeg concat."""
+    if not audio_list:
+        return None
+    temp_files, list_file, out_file = [], None, None
+    try:
+        for audio in audio_list:
+            f = tempfile.NamedTemporaryFile(suffix=".mp3", delete=False)
+            f.write(audio); f.close()
+            temp_files.append(f.name)
+        list_file = tempfile.mktemp(suffix=".txt")
+        with open(list_file, "w") as lf:
+            for tf in temp_files:
+                lf.write("file '" + tf + "'\n")
+        out_file = tempfile.mktemp(suffix=".mp3")
+        r = subprocess.run(
+            ["ffmpeg", "-y", "-f", "concat", "-safe", "0",
+             "-i", list_file, "-c", "copy", out_file], capture_output=True)
+        if r.returncode != 0:
+            r = subprocess.run(
+                ["ffmpeg", "-y", "-f", "concat", "-safe", "0",
+                 "-i", list_file, "-q:a", "4", out_file], capture_output=True)
+        if r.returncode == 0:
+            return open(out_file, "rb").read()
+    finally:
+        for tf in temp_files:
+            try: os.unlink(tf)
+            except: pass
+        for tmp in [list_file, out_file]:
+            if tmp:
+                try: os.unlink(tmp)
+                except: pass
+    return None
+
 # ════════════════════════════════════════════════════════════════════════════
 # 3-TAB LAYOUT
 # ════════════════════════════════════════════════════════════════════════════
@@ -1119,25 +1179,60 @@ with tab3:
                  f"{len(timed_segs)} segments · {total_ms//1000}s")
 
     if do_std_tts:
-        clean = tts_text.strip()
+        clean = strip_timecodes(tts_text)
         if not clean:
             st.warning("No text.")
-        elif len(clean) > 15000:
-            st.warning("Text too long (max 15 000 chars).")
         else:
-            with st.spinner(f"Generating — {selected_voice}..."):
-                try:
-                    audio_data, wbs = generate_tts(clean, selected_voice)
+            chunks = split_text_chunks(clean, max_chars=3000)
+            chunk_audios = []
+            prog = st.progress(0.0, text=f"Generating {len(chunks)} chunk(s)...")
+            try:
+                for i, ch in enumerate(chunks):
+                    audio_data, _ = generate_tts(ch, selected_voice)
                     if audio_data:
-                        st.components.v1.html(
-                            build_tts_player(clean, base64.b64encode(audio_data).decode(), wbs),
-                            height=480, scrolling=False)
-                        safe = re.sub(r'[^a-z0-9]+','_', tts_lang.lower())
-                        st.download_button("Download audio (MP3)", data=audio_data,
-                            file_name=f"tts_{safe}_{gender.lower()}.mp3",
-                            mime="audio/mpeg", key="tts_download")
-                except Exception as exc:
-                    st.error(f"TTS error: {exc}")
+                        chunk_audios.append(audio_data)
+                    prog.progress((i + 1) / len(chunks),
+                                  text=f"Chunk {i+1}/{len(chunks)} done")
+                prog.empty()
+                st.session_state["tts_chunks"]      = chunk_audios
+                st.session_state["tts_chunk_voice"] = f"{tts_lang}_{gender.lower()}"
+            except Exception as exc:
+                prog.empty()
+                st.error(f"TTS error: {exc}")
+
+    # ── Display generated chunks ──────────────────────────────────────────────
+    chunk_audios = st.session_state.get("tts_chunks", [])
+    if chunk_audios:
+        safe = re.sub(r'[^a-z0-9]+','_', st.session_state.get("tts_chunk_voice","tts"))
+
+        if len(chunk_audios) == 1:
+            st.audio(chunk_audios[0], format="audio/mpeg")
+            st.download_button("Download audio (MP3)", data=chunk_audios[0],
+                file_name=f"tts_{safe}.mp3", mime="audio/mpeg",
+                use_container_width=True, key="tts_dl_single")
+        else:
+            st.markdown(
+                f'<div style="font-family:monospace;font-size:11px;color:#555;'
+                f'margin:6px 0;">{len(chunk_audios)} chunks generated</div>',
+                unsafe_allow_html=True)
+            # JOIN ALL — top action
+            if st.button(f"Join all {len(chunk_audios)} chunks → one file",
+                         use_container_width=True, key="tts_join"):
+                with st.spinner("Joining chunks with ffmpeg..."):
+                    joined = join_audio_chunks(chunk_audios)
+                    if joined:
+                        st.success(f"Joined — {len(joined)//1024} KB")
+                        st.download_button("Download full audio (MP3)", data=joined,
+                            file_name=f"tts_{safe}_full.mp3", mime="audio/mpeg",
+                            use_container_width=True, key="tts_dl_joined")
+                    else:
+                        st.error("Join failed.")
+            # Individual chunk downloads
+            for i, audio in enumerate(chunk_audios):
+                st.download_button(f"Chunk {i+1} ({len(audio)//1024} KB)",
+                    data=audio, file_name=f"tts_{safe}_part{i+1:02d}.mp3",
+                    mime="audio/mpeg", use_container_width=True,
+                    key=f"tts_chunk_dl_{i}")
 
     if do_timed_tts and timed_segs:
         with st.spinner(f"Generating {len(timed_segs)} segments and assembling..."):
