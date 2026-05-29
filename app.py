@@ -341,7 +341,7 @@ function changeSpeed(){{audio.playbackRate=parseFloat(document.getElementById('s
 st.set_page_config(page_title=cfg["app_title"], page_icon="🎙️", layout="centered")
 st.markdown(
     '<div style="position:fixed;top:8px;right:12px;color:#555;font-size:11px;'
-    'z-index:9999;font-family:monospace;">v2.8</div>',
+    'z-index:9999;font-family:monospace;">v2.9</div>',
     unsafe_allow_html=True)
 
 st.markdown("""
@@ -845,8 +845,11 @@ with tab1:
             tc_s = "_timecode" if _tc else ""
             st.session_state.download_filename = f"{base}_{det_code}{tc_s}.txt"
             # Track settings used for this transcription
-            st.session_state["_last_lang_choice"]  = _lc
-            st.session_state["_last_timecode"]      = _tc
+            st.session_state["_last_lang_choice"] = _lc
+            st.session_state["_last_timecode"]     = _tc
+            # Force text area widget to show new content (widget state overrides value=)
+            st.session_state["result_area"]        = result_text
+            st.session_state["tts_text_area"]      = result_text
             st.rerun()
         except requests.exceptions.HTTPError as e:
             st.error(f"HTTP error: {e.response.status_code} — {e.response.text}")
