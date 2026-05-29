@@ -341,7 +341,7 @@ function changeSpeed(){{audio.playbackRate=parseFloat(document.getElementById('s
 st.set_page_config(page_title=cfg["app_title"], page_icon="🎙️", layout="centered")
 st.markdown(
     '<div style="position:fixed;top:8px;right:12px;color:#555;font-size:11px;'
-    'z-index:9999;font-family:monospace;">v2.6</div>',
+    'z-index:9999;font-family:monospace;">v2.7</div>',
     unsafe_allow_html=True)
 
 st.markdown("""
@@ -894,6 +894,34 @@ setTimeout(function(){{m.style.display='none';}},2000);}}</script>"""
         st.text_area("", st.session_state.transcript_text, height=360,
                      label_visibility="collapsed", key="result_area")
 
+        # Retranscribe — only if file still cached
+        if st.session_state.get("_cached_file_name"):
+            with st.expander(f"Retranscribe · {st.session_state['_cached_file_name']}", expanded=False):
+                re_lang = st.radio("Language", ["Hrvatski", "English", "Auto detect"],
+                                   horizontal=True, key="re_lang")
+                re_tc   = st.radio("Timecode", ["Off", "On"], horizontal=True, key="re_tc")
+                if st.button("Retranscribe", use_container_width=True, key="do_retranscribe"):
+                    _lc    = re_lang
+                    _tc    = re_tc == "On"
+                    _bytes = st.session_state["_cached_file_bytes"]
+                    _name  = st.session_state["_cached_file_name"]
+                    try:
+                        result_text, dur, det_code, det_label = transcribe(
+                            _bytes, _name, _lc, _tc)
+                        st.session_state.transcript_text   = result_text
+                        st.session_state.tts_input         = result_text
+                        st.session_state.detected_lang     = det_code
+                        st.session_state.trl_result        = ""
+                        st.session_state.trl_segments      = []
+                        base = os.path.splitext(_name)[0]
+                        tc_s = "_timecode" if _tc else ""
+                        st.session_state.download_filename = f"{base}_{det_code}{tc_s}.txt"
+                        st.rerun()
+                    except requests.exceptions.HTTPError as e:
+                        st.error(f"HTTP error: {e.response.status_code} — {e.response.text}")
+                    except Exception as e:
+                        st.error(f"Error: {str(e)}")
+
     else:
         # ── UPLOAD / TRANSCRIBE VIEW ─────────────────
         uploaded_file = st.file_uploader(
@@ -927,9 +955,7 @@ setTimeout(function(){{m.style.display='none';}},2000);}}</script>"""
                     st.session_state.detected_lang     = det_code
                     st.session_state.trl_result        = ""
                     st.session_state.trl_segments      = []
-                    # Clear cache after successful transcription
-                    st.session_state["_cached_file_bytes"] = b""
-                    st.session_state["_cached_file_name"]  = ""
+                    # Keep cached bytes — available for Retranscribe
                     base = os.path.splitext(_name)[0]
                     tc_s = "_timecode" if _tc else ""
                     st.session_state.download_filename = f"{base}_{det_code}{tc_s}.txt"
@@ -1086,8 +1112,24 @@ with tab3:
                             label_visibility="collapsed",
                             placeholder="Pull or paste text to read aloud...")
 
-    # Standard TTS
-    if st.button("Generate", use_container_width=True, key="tts_btn"):
+    timed_segs   = st.session_state.trl_segments or st.session_state.subtitle_segments
+    total_ms     = st.session_state.get("audio_duration_ms", 0)
+    source_label = "translated" if st.session_state.trl_segments else "original"
+
+    # Both generate buttons side by side
+    gb1, gb2 = st.columns(2)
+    with gb1:
+        do_std_tts = st.button("Generate", use_container_width=True, key="tts_btn")
+    with gb2:
+        timed_disabled = not bool(timed_segs)
+        do_timed_tts   = st.button(
+            "Timed audio" + ("" if timed_disabled else f" · {source_label}"),
+            use_container_width=True, key="tts_timed_btn",
+            disabled=timed_disabled,
+            help="Transcribe first to enable" if timed_disabled else
+                 f"{len(timed_segs)} segments · {total_ms//1000}s")
+
+    if do_std_tts:
         clean = tts_text.strip()
         if not clean:
             st.warning("No text.")
@@ -1108,39 +1150,20 @@ with tab3:
                 except Exception as exc:
                     st.error(f"TTS error: {exc}")
 
-    # Timed TTS (dubbed audio)
-    st.markdown("---")
-    st.markdown('<div style="font-family:monospace;font-size:11px;color:#555;'
-                'letter-spacing:1px;margin-bottom:8px;">TIMED TTS — dubbed audio at original timestamps</div>',
-                unsafe_allow_html=True)
-
-    timed_segs = st.session_state.trl_segments or st.session_state.subtitle_segments
-    if not timed_segs:
-        st.markdown('<div style="color:#333;font-family:monospace;font-size:12px;">'
-                    'No subtitle segments yet — transcribe audio first, then optionally translate.</div>',
-                    unsafe_allow_html=True)
-    else:
-        total_ms = st.session_state.get("audio_duration_ms", 0)
-        st.markdown(
-            f'<div style="font-family:monospace;font-size:11px;color:#555;">'
-            f'{len(timed_segs)} segments · {total_ms//1000}s total</div>',
-            unsafe_allow_html=True)
-        source_label = "translated" if st.session_state.trl_segments else "original"
-        btn_label = "Generate timed audio (" + source_label + " · " + selected_voice.split("-")[0] + ")"
-        if st.button(btn_label, use_container_width=True, key="tts_timed_btn"):
-            with st.spinner(f"Generating {len(timed_segs)} segments and assembling..."):
-                try:
-                    dub_audio = generate_timed_tts_audio(timed_segs, selected_voice, total_ms)
-                    if dub_audio:
-                        st.success(f"Timed audio ready — {len(dub_audio)//1024} KB")
-                        safe = re.sub(r'[^a-z0-9]+','_', tts_lang.lower())
-                        st.download_button("Download dubbed audio (MP3)", data=dub_audio,
-                            file_name=f"dubbed_{safe}_{gender.lower()}.mp3",
-                            mime="audio/mpeg", key="tts_timed_dl")
-                    else:
-                        st.error("Assembly failed.")
-                except Exception as exc:
-                    st.error(f"Error: {exc}")
+    if do_timed_tts and timed_segs:
+        with st.spinner(f"Generating {len(timed_segs)} segments and assembling..."):
+            try:
+                dub_audio = generate_timed_tts_audio(timed_segs, selected_voice, total_ms)
+                if dub_audio:
+                    st.success(f"Timed audio ready — {len(dub_audio)//1024} KB")
+                    safe = re.sub(r'[^a-z0-9]+','_', tts_lang.lower())
+                    st.download_button("Download dubbed audio (MP3)", data=dub_audio,
+                        file_name=f"dubbed_{safe}_{gender.lower()}.mp3",
+                        mime="audio/mpeg", key="tts_timed_dl")
+                else:
+                    st.error("Assembly failed.")
+            except Exception as exc:
+                st.error(f"Error: {exc}")
 
 
 # ─────────────────────────────────────────────────────
