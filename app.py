@@ -341,7 +341,7 @@ function changeSpeed(){{audio.playbackRate=parseFloat(document.getElementById('s
 st.set_page_config(page_title=cfg["app_title"], page_icon="🎙️", layout="centered")
 st.markdown(
     '<div style="position:fixed;top:8px;right:12px;color:#555;font-size:11px;'
-    'z-index:9999;font-family:monospace;">v2.7</div>',
+    'z-index:9999;font-family:monospace;">v2.8</div>',
     unsafe_allow_html=True)
 
 st.markdown("""
@@ -396,7 +396,9 @@ for key, default in [
     ("ext_lang_choice",   ""),
     ("_cached_file_bytes", b""),
     ("_cached_file_name",  ""),
-    ("_cached_file_size",  0),
+    ("_cached_file_size",   0),
+    ("_last_lang_choice",  ""),
+    ("_last_timecode",     False),
 ]:
     if key not in st.session_state:
         st.session_state[key] = default
@@ -824,7 +826,34 @@ tab1, tab2, tab3, tab4 = st.tabs(["Transcript", "Translation", "TTS", "CRE"])
 # ─────────────────────────────────────────────────────
 with tab1:
     has_transcript = bool(st.session_state.transcript_text)
+    has_cache      = bool(st.session_state.get("_cached_file_name"))
 
+    # ─── SHARED ACTION: run or re-run transcription ───────────────────────────
+    def run_transcription():
+        _lc    = st.session_state.get("_lang_choice", "Auto detect")
+        _tc    = st.session_state.get("_include_timecode", False)
+        _bytes = st.session_state["_cached_file_bytes"]
+        _name  = st.session_state["_cached_file_name"]
+        try:
+            result_text, dur, det_code, det_label = transcribe(_bytes, _name, _lc, _tc)
+            st.session_state.transcript_text   = result_text
+            st.session_state.tts_input         = result_text
+            st.session_state.detected_lang     = det_code
+            st.session_state.trl_result        = ""
+            st.session_state.trl_segments      = []
+            base = os.path.splitext(_name)[0]
+            tc_s = "_timecode" if _tc else ""
+            st.session_state.download_filename = f"{base}_{det_code}{tc_s}.txt"
+            # Track settings used for this transcription
+            st.session_state["_last_lang_choice"]  = _lc
+            st.session_state["_last_timecode"]      = _tc
+            st.rerun()
+        except requests.exceptions.HTTPError as e:
+            st.error(f"HTTP error: {e.response.status_code} — {e.response.text}")
+        except Exception as e:
+            st.error(f"Error: {str(e)}")
+
+    # ─── POST-TRANSCRIPT VIEW ─────────────────────────────────────────────────
     if has_transcript:
         det_code  = st.session_state.detected_lang
         det_label = CODE_TO_LABEL.get(det_code, det_code.upper()) if det_code else ""
@@ -867,7 +896,7 @@ setTimeout(function(){{m.style.display='none';}},2000);}}</script>"""
                 st.session_state.download_filename = "transkript.txt"
                 st.rerun()
 
-        # ROW 2: SRT | Avid (only if subtitles available)
+        # ROW 2: SRT | Avid
         if segs:
             c4, c5, c6 = st.columns(3)
             with c4:
@@ -894,104 +923,60 @@ setTimeout(function(){{m.style.display='none';}},2000);}}</script>"""
         st.text_area("", st.session_state.transcript_text, height=360,
                      label_visibility="collapsed", key="result_area")
 
-        # Retranscribe — only if file still cached
-        if st.session_state.get("_cached_file_name"):
-            with st.expander(f"Retranscribe · {st.session_state['_cached_file_name']}", expanded=False):
-                re_lang = st.radio("Language", ["Hrvatski", "English", "Auto detect"],
-                                   horizontal=True, key="re_lang")
-                re_tc   = st.radio("Timecode", ["Off", "On"], horizontal=True, key="re_tc")
-                if st.button("Retranscribe", use_container_width=True, key="do_retranscribe"):
-                    _lc    = re_lang
-                    _tc    = re_tc == "On"
-                    _bytes = st.session_state["_cached_file_bytes"]
-                    _name  = st.session_state["_cached_file_name"]
-                    try:
-                        result_text, dur, det_code, det_label = transcribe(
-                            _bytes, _name, _lc, _tc)
-                        st.session_state.transcript_text   = result_text
-                        st.session_state.tts_input         = result_text
-                        st.session_state.detected_lang     = det_code
-                        st.session_state.trl_result        = ""
-                        st.session_state.trl_segments      = []
-                        base = os.path.splitext(_name)[0]
-                        tc_s = "_timecode" if _tc else ""
-                        st.session_state.download_filename = f"{base}_{det_code}{tc_s}.txt"
-                        st.rerun()
-                    except requests.exceptions.HTTPError as e:
-                        st.error(f"HTTP error: {e.response.status_code} — {e.response.text}")
-                    except Exception as e:
-                        st.error(f"Error: {str(e)}")
-
+    # ─── UPLOAD VIEW (no transcript yet) ─────────────────────────────────────
     else:
-        # ── UPLOAD / TRANSCRIBE VIEW ─────────────────
         uploaded_file = st.file_uploader(
             "",
             type=["mp3","mp4","m4a","wav","aac","ogg","flac","webm",
                   "mov","mxf","wma","opus","3gp","amr","mp2","mpga","mpeg"],
             label_visibility="collapsed")
 
-        # Cache file bytes immediately on detection — fixes Android double-tap issue.
-        # Streamlit reruns on file select; by the time Transcribe is tapped, the
-        # widget may have reset. Session state preserves the bytes across reruns.
         if uploaded_file is not None:
             if st.session_state["_cached_file_name"] != uploaded_file.name:
                 st.session_state["_cached_file_bytes"] = uploaded_file.read()
                 st.session_state["_cached_file_name"]  = uploaded_file.name
                 st.session_state["_cached_file_size"]  = uploaded_file.size
+                has_cache = True
 
-        have_file = bool(st.session_state["_cached_file_name"])
+    # ─── SETTINGS (always visible — used by Transcribe AND Re-Transcribe) ─────
+    lang_choice = st.radio("Language", ["Hrvatski", "English", "Auto detect"],
+                           horizontal=True, key="lang_radio")
+    st.session_state["_lang_choice"] = lang_choice
 
-        if have_file:
-            if st.button("Transcribe", use_container_width=True, key="do_transcribe"):
-                _lc    = st.session_state.get("_lang_choice", "Auto detect")
-                _tc    = st.session_state.get("_include_timecode", False)
-                _bytes = st.session_state["_cached_file_bytes"]
-                _name  = st.session_state["_cached_file_name"]
-                try:
-                    result_text, dur, det_code, det_label = transcribe(
-                        _bytes, _name, _lc, _tc)
-                    st.session_state.transcript_text   = result_text
-                    st.session_state.tts_input         = result_text
-                    st.session_state.detected_lang     = det_code
-                    st.session_state.trl_result        = ""
-                    st.session_state.trl_segments      = []
-                    # Keep cached bytes — available for Retranscribe
-                    base = os.path.splitext(_name)[0]
-                    tc_s = "_timecode" if _tc else ""
-                    st.session_state.download_filename = f"{base}_{det_code}{tc_s}.txt"
-                    st.rerun()
-                except requests.exceptions.HTTPError as e:
-                    st.error(f"HTTP error: {e.response.status_code} — {e.response.text}")
-                except Exception as e:
-                    st.error(f"Error: {str(e)}")
+    tc_opt = st.radio("Timecode", ["Off", "On"], horizontal=True, key="tc_radio")
+    st.session_state["_include_timecode"] = tc_opt == "On"
 
-        # Primary language
-        lang_choice = st.radio("Language", ["Hrvatski", "English", "Auto detect"],
-                               horizontal=True)
-        st.session_state["_lang_choice"] = lang_choice
-
-        tc_opt = st.radio("Timecode", ["Off", "On"], horizontal=True)
-        st.session_state["_include_timecode"] = tc_opt == "On"
-
+    if not has_transcript:
         input_mode = st.radio("Source", ["Upload", "Rec"], horizontal=True)
         if input_mode == "Rec":
             st.components.v1.html(RECORDER_HTML, height=360)
 
-        if uploaded_file:
-            st.markdown(
-                f'<div class="status-box"><strong>{uploaded_file.name}</strong>'
-                f' — {lang_choice} — {uploaded_file.size//1024} KB</div>',
-                unsafe_allow_html=True)
+    # ─── PRIMARY ACTION BUTTON ────────────────────────────────────────────────
+    # Detects if settings differ from last transcription to label appropriately
+    if has_cache:
+        curr_lang = st.session_state.get("_lang_choice", "")
+        curr_tc   = st.session_state.get("_include_timecode", False)
+        last_lang = st.session_state.get("_last_lang_choice", "")
+        last_tc   = st.session_state.get("_last_timecode", False)
+        settings_changed = has_transcript and (curr_lang != last_lang or curr_tc != last_tc)
 
-        # ── EXPANDED LANGUAGE LIST ────────────────────
-        with st.expander("All languages (advanced)", expanded=False):
-            ext_lang = st.selectbox(
-                "Select any language for transcription",
-                ["— use primary selector above —"] + sorted(EXTENDED_LANGUAGE_MAP.keys()),
-                key="ext_lang_sel")
-            if ext_lang != "— use primary selector above —":
-                st.session_state["_lang_choice"] = ext_lang
-                st.info(f"Set to: {ext_lang} ({EXTENDED_LANGUAGE_MAP.get(ext_lang,'')})")
+        if has_transcript:
+            btn_label = "Re-Transcribe" + (" ↺" if settings_changed else "")
+        else:
+            btn_label = "Transcribe"
+
+        if st.button(btn_label, use_container_width=True, key="do_transcribe"):
+            run_transcription()
+
+    # ─── EXPANDED LANGUAGE LIST ───────────────────────────────────────────────
+    with st.expander("All languages (advanced)", expanded=False):
+        ext_lang = st.selectbox(
+            "Select any language for transcription",
+            ["— use primary selector above —"] + sorted(EXTENDED_LANGUAGE_MAP.keys()),
+            key="ext_lang_sel")
+        if ext_lang != "— use primary selector above —":
+            st.session_state["_lang_choice"] = ext_lang
+            st.info(f"Set to: {ext_lang} ({EXTENDED_LANGUAGE_MAP.get(ext_lang, '')})")
 
 
 # ─────────────────────────────────────────────────────
