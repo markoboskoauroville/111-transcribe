@@ -341,7 +341,7 @@ function changeSpeed(){{audio.playbackRate=parseFloat(document.getElementById('s
 st.set_page_config(page_title=cfg["app_title"], page_icon="🎙️", layout="centered")
 st.markdown(
     '<div style="position:fixed;top:8px;right:12px;color:#555;font-size:11px;'
-    'z-index:9999;font-family:monospace;">v2.5</div>',
+    'z-index:9999;font-family:monospace;">v2.6</div>',
     unsafe_allow_html=True)
 
 st.markdown("""
@@ -393,7 +393,10 @@ for key, default in [
     ("subtitle_segments", []),
     ("trl_segments",     []),
     ("fps",                25),
-    ("ext_lang_choice",  ""),
+    ("ext_lang_choice",   ""),
+    ("_cached_file_bytes", b""),
+    ("_cached_file_name",  ""),
+    ("_cached_file_size",  0),
 ]:
     if key not in st.session_state:
         st.session_state[key] = default
@@ -855,8 +858,12 @@ setTimeout(function(){{m.style.display='none';}},2000);}}</script>"""
         with c3:
             if st.button("New", use_container_width=True, key="new_session"):
                 for k in ["transcript_text","detected_lang","trl_result","tts_input",
-                          "subtitle_segments","trl_segments","audio_duration_ms"]:
-                    st.session_state[k] = [] if k in ["subtitle_segments","trl_segments"] else ""
+                          "subtitle_segments","trl_segments","audio_duration_ms",
+                          "_cached_file_name","_cached_file_bytes"]:
+                    st.session_state[k] = (
+                        [] if k in ["subtitle_segments","trl_segments"]
+                        else b"" if k == "_cached_file_bytes"
+                        else "")
                 st.session_state.download_filename = "transkript.txt"
                 st.rerun()
 
@@ -895,19 +902,35 @@ setTimeout(function(){{m.style.display='none';}},2000);}}</script>"""
                   "mov","mxf","wma","opus","3gp","amr","mp2","mpga","mpeg"],
             label_visibility="collapsed")
 
-        if uploaded_file:
+        # Cache file bytes immediately on detection — fixes Android double-tap issue.
+        # Streamlit reruns on file select; by the time Transcribe is tapped, the
+        # widget may have reset. Session state preserves the bytes across reruns.
+        if uploaded_file is not None:
+            if st.session_state["_cached_file_name"] != uploaded_file.name:
+                st.session_state["_cached_file_bytes"] = uploaded_file.read()
+                st.session_state["_cached_file_name"]  = uploaded_file.name
+                st.session_state["_cached_file_size"]  = uploaded_file.size
+
+        have_file = bool(st.session_state["_cached_file_name"])
+
+        if have_file:
             if st.button("Transcribe", use_container_width=True, key="do_transcribe"):
-                _lc = st.session_state.get("_lang_choice", "Auto detect")
-                _tc = st.session_state.get("_include_timecode", False)
+                _lc    = st.session_state.get("_lang_choice", "Auto detect")
+                _tc    = st.session_state.get("_include_timecode", False)
+                _bytes = st.session_state["_cached_file_bytes"]
+                _name  = st.session_state["_cached_file_name"]
                 try:
                     result_text, dur, det_code, det_label = transcribe(
-                        uploaded_file.read(), uploaded_file.name, _lc, _tc)
+                        _bytes, _name, _lc, _tc)
                     st.session_state.transcript_text   = result_text
                     st.session_state.tts_input         = result_text
                     st.session_state.detected_lang     = det_code
                     st.session_state.trl_result        = ""
                     st.session_state.trl_segments      = []
-                    base = os.path.splitext(uploaded_file.name)[0]
+                    # Clear cache after successful transcription
+                    st.session_state["_cached_file_bytes"] = b""
+                    st.session_state["_cached_file_name"]  = ""
+                    base = os.path.splitext(_name)[0]
                     tc_s = "_timecode" if _tc else ""
                     st.session_state.download_filename = f"{base}_{det_code}{tc_s}.txt"
                     st.rerun()
