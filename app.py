@@ -340,8 +340,8 @@ function changeSpeed(){{audio.playbackRate=parseFloat(document.getElementById('s
 # ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(page_title=cfg["app_title"], page_icon="🎙️", layout="centered")
 st.markdown(
-    '<div style="position:fixed;top:8px;left:12px;color:#555;font-size:11px;'
-    'z-index:9999;font-family:monospace;">v2.4</div>',
+    '<div style="position:fixed;top:8px;right:12px;color:#555;font-size:11px;'
+    'z-index:9999;font-family:monospace;">v2.5</div>',
     unsafe_allow_html=True)
 
 st.markdown("""
@@ -889,7 +889,11 @@ setTimeout(function(){{m.style.display='none';}},2000);}}</script>"""
 
     else:
         # ── UPLOAD / TRANSCRIBE VIEW ─────────────────
-        uploaded_file = st.file_uploader("", label_visibility="collapsed")
+        uploaded_file = st.file_uploader(
+            "",
+            type=["mp3","mp4","m4a","wav","aac","ogg","flac","webm",
+                  "mov","mxf","wma","opus","3gp","amr","mp2","mpga","mpeg"],
+            label_visibility="collapsed")
 
         if uploaded_file:
             if st.button("Transcribe", use_container_width=True, key="do_transcribe"):
