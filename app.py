@@ -341,7 +341,7 @@ function changeSpeed(){{audio.playbackRate=parseFloat(document.getElementById('s
 st.set_page_config(page_title=cfg["app_title"], page_icon="🎙️", layout="centered")
 st.markdown(
     '<div style="position:fixed;top:8px;right:12px;color:#555;font-size:11px;'
-    'z-index:9999;font-family:monospace;">v3.2</div>',
+    'z-index:9999;font-family:monospace;">v3.3</div>',
     unsafe_allow_html=True)
 
 st.markdown("""
@@ -402,6 +402,7 @@ for key, default in [
     ("_tx_version",        0),
     ("tts_chunks",         []),
     ("tts_chunk_voice",    ""),
+    ("tts_show_uploader",  False),
 ]:
     if key not in st.session_state:
         st.session_state[key] = default
@@ -1144,7 +1145,8 @@ with tab3:
     tts_detected = CODE_TO_LABEL.get(det_code_tts, "English") if det_code_tts else "English"
     tts_lang_idx = list(VOICE_MAP.keys()).index(tts_detected) if tts_detected in VOICE_MAP else 1
 
-    cp1, cp2 = st.columns(2)
+    # ── Three input sources: Pull transcript | Pull translation | Upload .txt ──
+    cp1, cp2, cp3 = st.columns(3)
     with cp1:
         if st.button("Pull transcript", use_container_width=True, key="tts_pull_tra"):
             st.session_state["tts_text_area"] = st.session_state.transcript_text or ""
@@ -1153,6 +1155,29 @@ with tab3:
         if st.button("Pull translation", use_container_width=True, key="tts_pull_trl"):
             st.session_state["tts_text_area"] = st.session_state.trl_result or ""
             st.rerun()
+    with cp3:
+        show_txt_upload = st.button("Upload .txt", use_container_width=True, key="tts_show_upload")
+        if show_txt_upload:
+            st.session_state["tts_show_uploader"] = not st.session_state.get("tts_show_uploader", False)
+
+    # Text file uploader — on_change callback captures bytes immediately (Android fix)
+    if st.session_state.get("tts_show_uploader", False):
+        def _cache_txt_file():
+            f = st.session_state.get("tts_txt_widget")
+            if f is not None:
+                try:
+                    text = f.getvalue().decode("utf-8", errors="replace")
+                    st.session_state["tts_text_area"] = text
+                    st.session_state["tts_show_uploader"] = False
+                except Exception:
+                    pass
+
+        st.file_uploader(
+            "",
+            type=["txt"],
+            label_visibility="collapsed",
+            key="tts_txt_widget",
+            on_change=_cache_txt_file)
 
     tts_lang = st.radio("Language", list(VOICE_MAP.keys()), index=tts_lang_idx,
                         horizontal=True, key="tts_lang_sel")
