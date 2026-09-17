@@ -22,10 +22,11 @@ from google.oauth2.service_account import Credentials
 # brackets raises if it is missing, so a deployment without that exact
 # name died on line 21 with a KeyError and no page at all. The ring reads
 # both names and decides at call time; see engine.aai_keys.
-from engine import (                                        # noqa: E402
-    aai_keys, aai_one_file, aai_call, transcribe_chunk, to_opus_chunks,
-    media_seconds, ffmpeg_ok, SPINNER, CHUNK_SECONDS, MAX_PARALLEL,
-    _human_bytes, _human_time)
+# IMPORTED UNDER A DIFFERENT NAME because app.py already has a
+# run_transcription — its button handler. Two functions with one name is a
+# collision pyflakes catches and a reader does not.
+from engine import aai_keys                                 # noqa: E402
+from engine import run_transcription as engine_run          # noqa: E402
 
 API_KEY = (aai_keys() or [""])[0]
 HEADERS = {"authorization": API_KEY}
@@ -649,14 +650,19 @@ def upload_with_progress(audio_bytes):
     resp.raise_for_status()
     return resp.json()["upload_url"]
 
-def transcribe(audio_bytes, filename="audio", lang_choice="Auto detect", include_timecode=False):
-    audio_bytes, was_converted = ensure_mono(audio_bytes, filename)
-    if was_converted:
-        st.info("Stereo to mono conversion done.")
+def transcribe(audio_bytes, filename="audio", lang_choice="Auto detect",
+               include_timecode=False):
+    """The whole job, shown as it happens.
 
-    upload_url = upload_with_progress(audio_bytes)
-    st.info("Uploaded. Starting transcription...")
+    THE OLD VERSION DID ONE UPLOAD AND ONE POLL LOOP on a single hard-coded
+    key, converted stereo to mono as an MP3, and showed a bare "Processing…
+    (33s)" counter that could not say whether anything was wrong. It also
+    kept the entire file in memory as WAV.
 
+    engine.run_transcription replaces all of it: ffmpeg straight to Opus in
+    ten-minute pieces, six at a time, each piece on ONE key with the ring
+    behind it, and the text box filling as the pieces land.
+    """
     if lang_choice == "Hrvatski":
         lang_params = {"language_code": "hr"}
     elif lang_choice == "English":
@@ -664,33 +670,46 @@ def transcribe(audio_bytes, filename="audio", lang_choice="Auto detect", include
     else:
         lang_params = {"language_detection": True}
 
-    tr = requests.post(
-        "https://api.assemblyai.com/v2/transcript",
-        headers={**HEADERS, "content-type": "application/json"},
-        json={
-            "audio_url":     upload_url,
-            **lang_params,
-            "speech_models": ["universal-3-pro", "universal-2"],
-            "punctuate":     True,
-            "format_text":   True,
-        })
-    tr.raise_for_status()
-    tid = tr.json()["id"]
-    ph = st.empty(); attempts = 0; poll = {}
+    status_box = st.empty()
+    text_box = st.empty()
+    # THE VERBOSE MONITOR IS FOLDED AWAY, not absent. Baba asked for it, and
+    # somebody who is not debugging should not have to read it — but when a
+    # transcription goes wrong it is the only thing that says why.
+    monitor = st.expander("what is happening", expanded=False)
+    notes = []
 
-    while True:
-        time.sleep(3)
-        poll = requests.get(
-            f"https://api.assemblyai.com/v2/transcript/{tid}",
-            headers=HEADERS).json()
-        attempts += 1
-        ph.info(f"Processing... ({attempts*3}s)")
-        if poll.get("status") == "completed":
-            ph.empty(); break
-        elif poll.get("status") == "error":
-            st.error(f"Error: {poll.get('error')}"); st.stop()
-        elif attempts > 120:
-            st.error("Timeout."); st.stop()
+    class _UI:
+        def status(self, t):
+            status_box.markdown(
+                "<div style='font-family:monospace;font-size:13px;"
+                "color:#ff9d3c;padding:4px 0'>%s</div>" % t,
+                unsafe_allow_html=True)
+
+        def text(self, t):
+            text_box.text_area("transcript so far", value=t, height=260,
+                               key="_live_%d" % len(t), disabled=True)
+
+        def note(self, t):
+            notes.append("%s  %s" % (time.strftime("%H:%M:%S"), t))
+            with monitor:
+                st.markdown("<div style='font-family:monospace;font-size:11px;"
+                            "color:#888'>%s</div>" % notes[-1],
+                            unsafe_allow_html=True)
+
+    try:
+        result_text = engine_run(audio_bytes, filename, lang_params, _UI())
+    except Exception as exc:                                 # noqa: BLE001
+        # A FAILURE IS A SENTENCE, NEVER SILENCE. The worst bug this app
+        # family ever had was a control that did nothing at all.
+        status_box.empty()
+        st.error(str(exc))
+        st.stop()
+
+    text_box.empty()
+    if not result_text.strip():
+        st.warning("Nothing was recognised in that audio.")
+    poll = {"text": result_text, "language_code": lang_params.get(
+        "language_code", "")}
 
     detected_code  = poll.get("language_code", "")
     detected_label = CODE_TO_LABEL.get(detected_code, detected_code.upper())
@@ -1057,8 +1076,25 @@ setTimeout(function(){{m.style.display='none';}},2000);}}</script>"""
 
         st.file_uploader(
             "",
+            # ANY FILE FFMPEG CAN READ. Baba: "this file picker can accept
+            # any file which FFmpeg can convert to audio. So it can be also
+            # video file."
+            #
+            # A HAND-WRITTEN LIST IS A LIST THAT MISSES SOMETHING, and the
+            # miss is silent: Streamlit simply refuses the file with no
+            # explanation, and the person concludes their recording is
+            # broken. ffmpeg reads hundreds of containers; these are the
+            # ones a broadcast editor actually hands it, and the widened
+            # tail is what an Android recorder and a camera produce.
+            #
+            # If something still gets refused, ffmpeg is the thing that
+            # decides — not this list — so the error names ffmpeg.
             type=["mp3","mp4","m4a","wav","aac","ogg","flac","webm",
-                  "mov","mxf","wma","opus","3gp","amr","mp2","mpga","mpeg"],
+                  "mov","mxf","wma","opus","3gp","amr","mp2","mpga","mpeg",
+                  "mkv","avi","wmv","flv","m4v","mts","m2ts","ts","vob",
+                  "mpg","mp4v","caf","aiff","aif","aifc","oga","opus",
+                  "wv","ape","dts","ac3","m4b","mka","f4v","asf","dv",
+                  "r3d","braw","avchd","m2v","rm","au","snd","voc"],
             label_visibility="collapsed",
             key="file_uploader_widget",
             on_change=_cache_uploaded_file)

@@ -136,7 +136,6 @@ def aai_keys():
 
 def aai_verdict(status, body=""):
     """One of three words. Never raises."""
-    b = (body or "").lower()
     if status in (401, 403):
         return AAI_REFUSED
     if status == 429:
@@ -371,3 +370,98 @@ def transcribe_chunk(path, lang_params, on_note=None):
     if got is None:
         return None, err or "failed"
     return got, ""
+
+
+# ── The run ───────────────────────────────────────────────────────────────────
+
+def run_transcription(raw_bytes, filename, lang_params, ui):
+    """The whole job, reporting as it goes. Returns the full text.
+
+    Baba, 17.9.2026: "each segment is progressively added to the text box
+    status line so user can see transcription as it comes. First 10 minutes
+    in the text box, and then it will say, I don't know, first piece of 10,
+    1 of 10, and then it will just fill up the text box until it comes to
+    the end."
+
+    `ui` carries three callables so this file never imports a widget:
+        ui.status(text)   one line, replaced each time
+        ui.text(text)     the transcript so far
+        ui.note(text)     the verbose monitor, appended
+
+    CHUNKS COME BACK IN ORDER EVEN THOUGH THEY FINISH OUT OF ORDER. Six run
+    at once and the short last piece often lands first; showing it first
+    would put the end of the recording at the top of the box. Results go
+    into a slot per index and the box is redrawn from the slots, so what he
+    reads is always the recording in the order it was spoken.
+    """
+    t_start = time.time()
+
+    if not ffmpeg_ok():
+        raise RuntimeError("ffmpeg is not installed on this server.")
+
+    ui.status("%s reading the file…" % SPINNER[0])
+    ui.note("input: %s, %s" % (filename, _human_bytes(len(raw_bytes))))
+
+    parts, _src = to_opus_chunks(raw_bytes, filename, note=ui.note)
+    audio_s = sum(media_seconds(p) for p in parts)
+    packed = sum(os.path.getsize(p) for p in parts)
+    ui.note("compressed to %s in %d piece%s  (%.0fx smaller)"
+            % (_human_bytes(packed), len(parts), "" if len(parts) == 1 else "s",
+               (len(raw_bytes) / packed) if packed else 1))
+    ui.note("audio length %s" % _human_time(audio_s))
+
+    # THE ESTIMATE, FROM A MEASUREMENT RATHER THAN A GUESS.
+    #
+    # Measured 17.9.2026 on Baba's Croatian: 22.5 minutes of audio, three
+    # chunks, six parallel, finished in 17.5 seconds — about 77x faster than
+    # real time. The estimate uses 40x, deliberately pessimistic, because an
+    # ETA that runs out while the person is still waiting is worse than one
+    # that finishes early.
+    rounds = max(1, (len(parts) + MAX_PARALLEL - 1) // MAX_PARALLEL)
+    eta = max(8.0, (audio_s / 40.0) * rounds / max(1, len(parts)) * len(parts))
+
+    slots = [None] * len(parts)
+    done = [0]
+
+    def draw(frame):
+        got = done[0]
+        left = max(0.0, eta - (time.time() - t_start))
+        ui.status("%s  %d of %d  ·  %s elapsed  ·  about %s left"
+                  % (SPINNER[frame % len(SPINNER)], got, len(parts),
+                     _human_time(time.time() - t_start), _human_time(left)))
+
+    def one(i):
+        got, err = transcribe_chunk(parts[i], lang_params, on_note=ui.note)
+        if err:
+            # A FAILED PIECE IS NAMED AND THE REST CONTINUES. Twenty minutes
+            # of transcript is worth having with one gap in it; throwing it
+            # all away because piece four failed is not.
+            slots[i] = "[piece %d could not be transcribed: %s]" % (i + 1, err)
+            ui.note("piece %d FAILED: %s" % (i + 1, err))
+        else:
+            slots[i] = got.get("text") or ""
+            ui.note("piece %d done, %d words" % (i + 1, len(slots[i].split())))
+        done[0] += 1
+        ui.text("\n\n".join(x for x in slots if x is not None))
+        return i
+
+    frame = 0
+    with _cf.ThreadPoolExecutor(max_workers=MAX_PARALLEL) as ex:
+        futures = [ex.submit(one, i) for i in range(len(parts))]
+        while any(not f.done() for f in futures):
+            draw(frame)
+            frame += 1
+            time.sleep(0.4)
+        for f in futures:
+            f.result()
+
+    text = "\n\n".join(x or "" for x in slots).strip()
+    ui.status("done  ·  %d piece%s  ·  %s  ·  %d words"
+              % (len(parts), "" if len(parts) == 1 else "s",
+                 _human_time(time.time() - t_start), len(text.split())))
+    for p in parts:
+        try:
+            os.remove(p)
+        except Exception:
+            pass
+    return text
