@@ -29,7 +29,7 @@ from google.oauth2.service_account import Credentials
 # accident.
 #
 # ONE NAME, AT THE TOP, WHERE SOMEBODY CHANGING A VERSION WILL SEE IT.
-APP_VERSION = "v3.14"
+APP_VERSION = "v3.15"
 
 # ── Secrets ───────────────────────────────────────────────────────────────────
 # ONE KEY WAS A HARD REQUIREMENT HERE — st.secrets["..."] with square
@@ -696,14 +696,24 @@ def speaker_text(utterances, names, with_timecode=False):
     lines = []
     for u in utterances:
         who = u.get("speaker", "?")
-        label = (names.get(who) or "").strip() or ("Speaker %s" % who)
+        # SQUARE BRACKETS, AND THE LETTER ON ITS OWN. Baba, 17.9.2026:
+        # "each speaker label will be inside square brackets."
+        #
+        # [A] rather than "Speaker A:" — shorter on a phone, and it reads
+        # as a MARK rather than as something somebody said. In a broadcast
+        # script a bracket is already what a name in the margin looks
+        # like, and when he names the voice it simply becomes [Marinko].
+        label = (names.get(who) or "").strip() or str(who)
         said = (u.get("text") or "").strip()
         if not said:
             continue
         if with_timecode:
-            lines.append("[%s]  %s: %s" % (ms_to_tc(u.get("start", 0)), label, said))
+            # THE TIMECODE KEEPS ITS OWN BRACKETS and comes first, so two
+            # bracketed things in a row never read as one.
+            lines.append("[%s] [%s] %s"
+                         % (ms_to_tc(u.get("start", 0)), label, said))
         else:
-            lines.append("%s: %s" % (label, said))
+            lines.append("[%s] %s" % (label, said))
     return "\n\n".join(lines)
 
 
@@ -795,6 +805,18 @@ def transcribe(audio_bytes, filename="audio", lang_choice="Auto detect",
         st.stop()
 
     text_box.empty()
+    # THE LABELS ARE THERE FROM THE FIRST LOOK. Baba: "automatically add
+    # speaker labels, speaker A, B, C, D. If user change it and apply,
+    # then you change also by the real name."
+    #
+    # Until now the transcript arrived as one block of prose and the
+    # letters only appeared after somebody opened the panel, typed a name
+    # and pressed apply — so the diarisation he had waited longer for was
+    # invisible unless he went looking for it.
+    if utterances and len(speakers_heard(utterances)) > 1:
+        result_text = speaker_text(
+            utterances, st.session_state.get("_speaker_names", {}),
+            st.session_state.get("_include_timecode", False))
     if not result_text.strip():
         st.warning("Nothing was recognised in that audio.")
     poll = {"text": result_text, "language_code": lang_params.get(
@@ -1090,43 +1112,6 @@ with tab1:
     # One row per voice: how much it said, and a box to name it. Naming is
     # what makes a diarised transcript usable — "Speaker B" is no better than
     # a letter when he is cutting an interview at midnight.
-    _utts = st.session_state.get("_utterances") or []
-    if _utts:
-        heard = speakers_heard(_utts)
-        # FOLDED AWAY, NOT ABSENT. Baba: "speaker should come under a
-        # speaker kind of title which user can uncollapse and add speakers.
-        # Otherwise those speakers take a lot of real estate."
-        #
-        # Thirteen voices is thirteen rows of three columns between him and
-        # his transcript, and most of the time he wants to read the words
-        # rather than name anybody. The title carries the COUNT so the
-        # panel says what is inside it without being opened.
-        with st.expander("Speakers (%d) — name them and the transcript follows"
-                         % len(heard), expanded=False):
-            names = st.session_state.setdefault("_speaker_names", {})
-            for who in heard:
-                mine = [u for u in _utts if u.get("speaker") == who]
-                said = sum(len((u.get("text") or "").split()) for u in mine)
-                first = ms_to_tc(mine[0].get("start", 0)) if mine else "00:00:00.00"
-                cols = st.columns([1, 2, 3])
-                with cols[0]:
-                    st.markdown("**%s**" % who)
-                with cols[1]:
-                    st.caption("%d words · first at %s" % (said, first))
-                with cols[2]:
-                    names[who] = st.text_input(
-                        "name for %s" % who, value=names.get(who, ""),
-                        key="_spname_%s" % who, label_visibility="collapsed",
-                        placeholder="Speaker %s" % who)
-            rebuilt = speaker_text(_utts, names,
-                                   st.session_state.get("_include_timecode", False))
-            if rebuilt and rebuilt != st.session_state.get("transcript_text", ""):
-                if st.button("apply the names to the transcript"):
-                    st.session_state.transcript_text = rebuilt
-                    st.session_state.tts_input = rebuilt
-                    st.session_state["_tx_version"] = st.session_state.get("_tx_version", 0) + 1
-                    st.rerun()
-
     # ─── POST-TRANSCRIPT VIEW ─────────────────────────────────────────────────
     if has_transcript:
         det_code  = st.session_state.detected_lang
@@ -1234,6 +1219,44 @@ setTimeout(function(){{m.style.display='none';}},2000);}}</script>"""
             st.markdown('<div class="detected-lang">%s</div>'
                         % " &nbsp;&nbsp;|&nbsp;&nbsp; ".join(_bits),
                         unsafe_allow_html=True)
+
+    _utts = st.session_state.get("_utterances") or []
+    if _utts:
+        heard = speakers_heard(_utts)
+        # FOLDED AWAY, NOT ABSENT. Baba: "speaker should come under a
+        # speaker kind of title which user can uncollapse and add speakers.
+        # Otherwise those speakers take a lot of real estate."
+        #
+        # Thirteen voices is thirteen rows of three columns between him and
+        # his transcript, and most of the time he wants to read the words
+        # rather than name anybody. The title carries the COUNT so the
+        # panel says what is inside it without being opened.
+        with st.expander("Speakers (%d) — name them and the transcript follows"
+                         % len(heard), expanded=False):
+            names = st.session_state.setdefault("_speaker_names", {})
+            for who in heard:
+                mine = [u for u in _utts if u.get("speaker") == who]
+                said = sum(len((u.get("text") or "").split()) for u in mine)
+                first = ms_to_tc(mine[0].get("start", 0)) if mine else "00:00:00.00"
+                cols = st.columns([1, 2, 3])
+                with cols[0]:
+                    st.markdown("**%s**" % who)
+                with cols[1]:
+                    st.caption("%d words · first at %s" % (said, first))
+                with cols[2]:
+                    names[who] = st.text_input(
+                        "name for %s" % who, value=names.get(who, ""),
+                        key="_spname_%s" % who, label_visibility="collapsed",
+                        placeholder="Speaker %s" % who)
+            rebuilt = speaker_text(_utts, names,
+                                   st.session_state.get("_include_timecode", False))
+            if rebuilt and rebuilt != st.session_state.get("transcript_text", ""):
+                if st.button("apply the names to the transcript"):
+                    st.session_state.transcript_text = rebuilt
+                    st.session_state.tts_input = rebuilt
+                    st.session_state["_tx_version"] = st.session_state.get("_tx_version", 0) + 1
+                    st.rerun()
+
 
         st.text_area("", st.session_state.transcript_text, height=360,
                      label_visibility="collapsed",
