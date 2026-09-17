@@ -1079,30 +1079,39 @@ with tab1:
     _utts = st.session_state.get("_utterances") or []
     if _utts:
         heard = speakers_heard(_utts)
-        st.markdown("**Speakers** — name them and the transcript follows")
-        names = st.session_state.setdefault("_speaker_names", {})
-        for who in heard:
-            mine = [u for u in _utts if u.get("speaker") == who]
-            said = sum(len((u.get("text") or "").split()) for u in mine)
-            first = ms_to_tc(mine[0].get("start", 0)) if mine else "00:00:00.00"
-            cols = st.columns([1, 2, 3])
-            with cols[0]:
-                st.markdown("**%s**" % who)
-            with cols[1]:
-                st.caption("%d words · first at %s" % (said, first))
-            with cols[2]:
-                names[who] = st.text_input(
-                    "name for %s" % who, value=names.get(who, ""),
-                    key="_spname_%s" % who, label_visibility="collapsed",
-                    placeholder="Speaker %s" % who)
-        rebuilt = speaker_text(_utts, names,
-                               st.session_state.get("_include_timecode", False))
-        if rebuilt and rebuilt != st.session_state.get("transcript_text", ""):
-            if st.button("apply the names to the transcript"):
-                st.session_state.transcript_text = rebuilt
-                st.session_state.tts_input = rebuilt
-                st.session_state["_tx_version"] = st.session_state.get("_tx_version", 0) + 1
-                st.rerun()
+        # FOLDED AWAY, NOT ABSENT. Baba: "speaker should come under a
+        # speaker kind of title which user can uncollapse and add speakers.
+        # Otherwise those speakers take a lot of real estate."
+        #
+        # Thirteen voices is thirteen rows of three columns between him and
+        # his transcript, and most of the time he wants to read the words
+        # rather than name anybody. The title carries the COUNT so the
+        # panel says what is inside it without being opened.
+        with st.expander("Speakers (%d) — name them and the transcript follows"
+                         % len(heard), expanded=False):
+            names = st.session_state.setdefault("_speaker_names", {})
+            for who in heard:
+                mine = [u for u in _utts if u.get("speaker") == who]
+                said = sum(len((u.get("text") or "").split()) for u in mine)
+                first = ms_to_tc(mine[0].get("start", 0)) if mine else "00:00:00.00"
+                cols = st.columns([1, 2, 3])
+                with cols[0]:
+                    st.markdown("**%s**" % who)
+                with cols[1]:
+                    st.caption("%d words · first at %s" % (said, first))
+                with cols[2]:
+                    names[who] = st.text_input(
+                        "name for %s" % who, value=names.get(who, ""),
+                        key="_spname_%s" % who, label_visibility="collapsed",
+                        placeholder="Speaker %s" % who)
+            rebuilt = speaker_text(_utts, names,
+                                   st.session_state.get("_include_timecode", False))
+            if rebuilt and rebuilt != st.session_state.get("transcript_text", ""):
+                if st.button("apply the names to the transcript"):
+                    st.session_state.transcript_text = rebuilt
+                    st.session_state.tts_input = rebuilt
+                    st.session_state["_tx_version"] = st.session_state.get("_tx_version", 0) + 1
+                    st.rerun()
 
     # ─── POST-TRANSCRIPT VIEW ─────────────────────────────────────────────────
     if has_transcript:
@@ -1137,6 +1146,21 @@ setTimeout(function(){{m.style.display='none';}},2000);}}</script>"""
             st.components.v1.html(_ch, height=52)
         with c3:
             if st.button("New", use_container_width=True, key="new_session"):
+                # NEW MEANS NEW. Baba, 17.9.2026: "when I click New
+                # Transcription, the speakers are surviving. New
+                # transcription should delete everything."
+                #
+                # THE LIST WAS HAND-WRITTEN, so it held whatever existed on
+                # the day somebody wrote it and knew nothing of the speaker
+                # work added afterwards. The old voices stayed, their names
+                # stayed, and the name boxes kept their typed values —
+                # which is worse than untidy: the next recording would be
+                # offered "Marinko" for a voice that is not his.
+                #
+                # A hand-written list of things to clear will be wrong
+                # again the next time something is added. The speaker keys
+                # are cleared BY PREFIX so anything named that way goes
+                # with them.
                 for k in ["transcript_text","detected_lang","trl_result","tts_input",
                           "subtitle_segments","trl_segments","audio_duration_ms",
                           "_cached_file_name","_cached_file_bytes"]:
@@ -1144,6 +1168,13 @@ setTimeout(function(){{m.style.display='none';}},2000);}}</script>"""
                         [] if k in ["subtitle_segments","trl_segments"]
                         else b"" if k == "_cached_file_bytes"
                         else "")
+                for k in ["_utterances", "_speaker_names"]:
+                    st.session_state.pop(k, None)
+                # The per-voice name boxes are widgets, so their typed text
+                # lives under their own keys and outlives the dictionary.
+                for k in [x for x in list(st.session_state)
+                          if str(x).startswith("_spname_")]:
+                    st.session_state.pop(k, None)
                 st.session_state.download_filename = "transkript.txt"
                 st.rerun()
 

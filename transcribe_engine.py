@@ -272,11 +272,27 @@ def to_opus_chunks(raw_bytes, filename, seconds=CHUNK_SECONDS, note=None):
     long file is never decoded to disk as WAV first — which on a 200 MB
     upload would mean a gigabyte of temporary space nobody budgeted for.
     """
+    # THE OUTPUT GETS ITS OWN FOLDER, and that is not tidiness.
+    #
+    # Baba, 17.9.2026: "Opus, nothing is happening when I upload Opus."
+    #
+    # The input was written beside the output as "in<ext>" and the chunks
+    # were then collected BY EXTENSION. Upload a .opus or a .ogg and the
+    # input file matches the pattern too — so the whole recording came back
+    # as chunk one, followed by the real chunks: every word transcribed
+    # twice, paid for twice, and "in.opus" sorting before "p0000.opus" put
+    # the duplicate first.
+    #
+    # It only bit on the formats we ourselves encode to, which is why WAV
+    # worked and Opus did not. Collecting by NAME would have been the same
+    # bug waiting for a file called p0000.opus.
     tmp_dir = tempfile.mkdtemp(prefix="mt_")
+    out_dir = os.path.join(tmp_dir, "chunks")
+    os.makedirs(out_dir, exist_ok=True)
     src = os.path.join(tmp_dir, "in" + (os.path.splitext(filename)[1] or ".bin"))
     with open(src, "wb") as fh:
         fh.write(raw_bytes)
-    pattern = os.path.join(tmp_dir, "p%04d.opus")
+    pattern = os.path.join(out_dir, "p%04d.opus")
     cmd = ["ffmpeg", "-y", "-i", src, "-vn",
            "-ac", "1", "-ar", str(AUDIO_RATE),
            "-c:a", "libopus", "-b:a", AUDIO_BITRATE,
@@ -285,11 +301,11 @@ def to_opus_chunks(raw_bytes, filename, seconds=CHUNK_SECONDS, note=None):
     if note:
         note("compressing…")
     proc = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
-    parts = sorted(f for f in os.listdir(tmp_dir) if f.endswith(".opus"))
+    parts = sorted(f for f in os.listdir(out_dir) if f.endswith(".opus"))
     if not parts:
         tail = (proc.stderr or "")[-300:]
         raise RuntimeError("ffmpeg could not read that file.\n" + tail)
-    return [os.path.join(tmp_dir, p) for p in parts], src
+    return [os.path.join(out_dir, p) for p in parts], src
 
 
 def media_seconds(path):
