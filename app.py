@@ -1196,11 +1196,30 @@ setTimeout(function(){{m.style.display='none';}},2000);}}</script>"""
                     file_name=f"{st.session_state.download_filename.replace('.txt','')}.txt",
                     mime="text/plain", use_container_width=True, key="dl_avid")
 
+        # WHAT THIS RECORDING TURNED OUT TO BE — and it does not claim to
+        # have DETECTED a language he chose himself.
+        #
+        # Baba, 17.9.2026: "detected Croatian language. It is not detected.
+        # The user pressed Croatian and then detection is not needed. And
+        # in the same status line put how many speakers are detected."
+        #
+        # He is right that the word was a lie. The app asks the language
+        # before it starts, and if he answered "Hrvatski" then nothing was
+        # detected — it was obeyed. The word is kept ONLY for Auto detect,
+        # where it is true and worth knowing.
+        _bits = []
         if det_code:
-            st.markdown(
-                f'<div class="detected-lang">Detected: <strong>{det_label}</strong>'
-                f' &nbsp;·&nbsp; <code>{det_code}</code></div>',
-                unsafe_allow_html=True)
+            _chose = st.session_state.get("_lang_choice", "Auto detect")
+            _word = "Detected" if _chose == "Auto detect" else "Language"
+            _bits.append("%s: <strong>%s</strong> &nbsp;·&nbsp; <code>%s</code>"
+                         % (_word, det_label, det_code))
+        _n_spk = len(speakers_heard(st.session_state.get("_utterances") or []))
+        if _n_spk:
+            _bits.append("Speakers: <strong>%d</strong>" % _n_spk)
+        if _bits:
+            st.markdown('<div class="detected-lang">%s</div>'
+                        % " &nbsp;&nbsp;|&nbsp;&nbsp; ".join(_bits),
+                        unsafe_allow_html=True)
 
         st.text_area("", st.session_state.transcript_text, height=360,
                      label_visibility="collapsed",
@@ -1257,7 +1276,16 @@ setTimeout(function(){{m.style.display='none';}},2000);}}</script>"""
     # the whole recording has to go as one job for the labels to mean the
     # same thing from beginning to end, which gives up the six-way parallel
     # that makes this app quick.
-    sp_opt = st.radio("Speakers", ["Off", "Detect"], horizontal=True,
+    # DETECT FIRST, SO IT IS THE DEFAULT. Baba, 17.9.2026: "speaker
+    # detection is default. First comes Detect and then second is Off."
+    #
+    # A radio takes its first option unless told otherwise, so the order IS
+    # the default — there is no separate setting to keep in step with it.
+    # Most of what goes through this app is an interview or a piece with
+    # several voices, and the one case that does not need it, a voiceover
+    # read by one person, costs nothing: one speaker is found and the
+    # labels are dropped on the way out.
+    sp_opt = st.radio("Speakers", ["Detect", "Off"], horizontal=True,
                       key="sp_radio")
     st.session_state["_speakers"] = sp_opt == "Detect"
     if sp_opt == "Detect":
