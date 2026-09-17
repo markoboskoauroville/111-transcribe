@@ -8,6 +8,7 @@ import base64
 import threading
 import re
 import ipaddress
+import hmac
 import subprocess
 import tempfile
 from datetime import datetime
@@ -19,7 +20,10 @@ from google.oauth2.service_account import Credentials
 # ── Secrets ───────────────────────────────────────────────────────────────────
 API_KEY        = st.secrets["ASSEMBLYAI_API_KEY"]
 HEADERS        = {"authorization": API_KEY}
-ADMIN_PASSWORD = st.secrets.get("ADMIN_PASSWORD", "admin123")
+# ADMIN_PASSWORD was read here and used NOWHERE in 1,343 lines, with a
+# default of "admin123". Removed with the gate that replaces it: a
+# variable that looks like a password check and is not one is worse than
+# no check at all, because it stops anybody asking where the check is.
 SETTINGS_FILE  = Path("/tmp/Marko_settings.json")
 
 def load_settings():
@@ -343,6 +347,49 @@ st.markdown(
     '<div style="position:fixed;top:8px;right:12px;color:#555;font-size:11px;'
     'z-index:9999;font-family:monospace;">v3.3</div>',
     unsafe_allow_html=True)
+
+# ── The door ──────────────────────────────────────────────────────────────────
+#
+# Baba, 13.9.2026: "add to the secrets password so this app will be opened
+# by password only... whatever password is in the secret, user will be
+# able to open that app. Without secret password, nothing."
+#
+# IT RUNS BEFORE ANYTHING ELSE IS DRAWN and calls st.stop(), so a wrong
+# password does not merely hide the page — the rest of the script never
+# executes. Nothing is fetched, no key is used, nothing is on screen to
+# read from the page source.
+#
+# NO PASSWORD IN SECRETS MEANS NOBODY GETS IN. The old ADMIN_PASSWORD
+# line had a default of "admin123" and was never used anywhere, which is
+# the worst of both worlds: it looked like a gate and was not one, and
+# the fallback was a password anyone could guess. A missing secret is now
+# a locked door, not an open one with a famous key.
+APP_PASSWORD = str(st.secrets.get("APP_PASSWORD", "") or "")
+
+
+def _door():
+    if st.session_state.get("_in"):
+        return
+    st.markdown("### 🎙️ " + cfg["app_title"])
+    if not APP_PASSWORD:
+        # SAY WHICH SECRET IS MISSING. Somebody looking at a locked app
+        # they own needs to know it is unconfigured, not broken.
+        st.error("No APP_PASSWORD is set in Secrets, so nobody can get in.")
+        st.stop()
+    typed = st.text_input("Password", type="password", key="_pw")
+    # ENTER SUBMITS, because a text_input reruns on Enter and that is how
+    # a password field is expected to behave. The button is for anyone
+    # whose keyboard hides it.
+    if st.button("Enter", use_container_width=True) or typed:
+        if hmac.compare_digest(typed, APP_PASSWORD):
+            st.session_state["_in"] = True
+            st.rerun()
+        elif typed:
+            st.error("Wrong password.")
+    st.stop()
+
+
+_door()
 
 st.markdown("""
 <style>
