@@ -201,14 +201,33 @@ def aai_call(method, path, key, **kw):
     return r, aai_verdict(r.status_code, r.text[:400])
 
 
-def aai_try(fn, on_note=None, tries=4):
-    """Run fn(key) across the ring until one works.
+def aai_one_file(job, on_note=None, tries=4):
+    """Run a WHOLE audio file on ONE key. Fall back only by starting over.
 
-    fn returns (result, verdict). A falsy verdict means it worked.
+    Baba, 17.9.2026: "never use multiple APIs on one audio file. Always use
+    one API on one audio file."
 
-    BACKS OFF WITH JITTER between passes. Several chunks failing at once
-    would otherwise all retry at the same instant and deliver the same burst
-    that caused the refusal.
+    HE IS RIGHT, AND IT IS NOT A PREFERENCE — IT IS THE API. Measured
+    17.9.2026 against two live accounts:
+
+        key B polling key A's transcript      HTTP 404
+        key B starting a job from A's upload  "Cannot access uploaded file"
+
+    An upload belongs to the account that made it and a transcript belongs
+    to the account that started it. The previous version rotated PER
+    REQUEST — upload on one key, start on another, poll on a third — which
+    would have 404ed mid-job and lost work that was already paid for, with
+    no error that named the cause.
+
+    So a key is chosen once and carries the file from upload to finished
+    text. If it fails, the NEXT key begins again from the upload, because
+    there is nothing of the first attempt it could inherit.
+
+    `job` is called as job(key) and returns (result, verdict). A falsy
+    verdict means the whole file is done.
+
+    BACKOFF CARRIES JITTER, so several chunks failing together do not all
+    retry in the same instant and deliver the burst that caused it.
     """
     import random
     last = AAI_UNKNOWN
@@ -217,14 +236,16 @@ def aai_try(fn, on_note=None, tries=4):
         if not keys:
             return None, "no keys left"
         for key in keys:
-            result, verdict = fn(key)
+            fp = _hashlib.sha256(key.encode()).hexdigest()[:6]
+            if on_note:
+                on_note("key %s: working" % fp)
+            result, verdict = job(key)
             if not verdict:
                 return result, ""
             last = verdict
             _mark(key, verdict)
             if on_note:
-                on_note("key %s: %s" % (
-                    _hashlib.sha256(key.encode()).hexdigest()[:6], verdict))
+                on_note("key %s: %s" % (fp, verdict))
             if verdict == AAI_UNKNOWN:
                 # THE LINE, NOT THE KEY. Pause and come back to this same
                 # key rather than spending the ring on a bad connection.
@@ -286,47 +307,67 @@ def media_seconds(path):
 # ── One chunk, end to end ─────────────────────────────────────────────────────
 
 def transcribe_chunk(path, lang_params, on_note=None):
-    """Upload, start, poll. Returns (payload, error_string)."""
+    """One audio file, start to finished text, on ONE key.
+
+    Every step below uses the SAME key by construction — see aai_one_file
+    for the measurement that makes this mandatory rather than tidy.
+    """
     data = open(path, "rb").read()
+    body_base = {"punctuate": True, "format_text": True,
+                 "speech_models": ["universal-3-pro", "universal-2"],
+                 **lang_params}
 
-    def _upload(key):
-        return aai_call("POST", "/upload", key, data=data,
+    def whole_file(key):
+        # 1. UPLOAD
+        r, v = aai_call("POST", "/upload", key, data=data,
                         headers={"content-type": "application/octet-stream"},
-                        timeout=600)
+                        timeout=900)
+        if v or r is None:
+            return None, v or AAI_UNKNOWN
+        url = r.json().get("upload_url")
+        if not url:
+            return None, AAI_UNKNOWN
 
-    r, err = aai_try(_upload, on_note)
-    if err or r is None:
-        return None, "upload failed: %s" % err
-    url = r.json().get("upload_url")
-
-    body = {"audio_url": url, "punctuate": True, "format_text": True,
-            "speech_models": ["universal-3-pro", "universal-2"], **lang_params}
-
-    def _start(key):
-        return aai_call("POST", "/transcript", key, json=body,
+        # 2. START
+        r, v = aai_call("POST", "/transcript", key,
+                        json={"audio_url": url, **body_base},
                         headers={"content-type": "application/json"})
-
-    r, err = aai_try(_start, on_note)
-    if err or r is None:
-        return None, "could not start: %s" % err
-    tid = r.json().get("id")
-
-    # POLLING SURVIVES THE LINE GOING DOWN. A failed poll is not a failed
-    # job — the work continues on their side, so this keeps asking rather
-    # than giving up on a transcript that is already being made.
-    t0 = time.time()
-    while time.time() - t0 < 3600:
-        time.sleep(3)
-
-        def _poll(key):
-            return aai_call("GET", "/transcript/" + tid, key, timeout=60)
-
-        r, err = aai_try(_poll, on_note, tries=2)
-        if err or r is None:
-            continue
+        if v or r is None:
+            return None, v or AAI_UNKNOWN
         got = r.json()
-        if got.get("status") == "completed":
-            return got, ""
-        if got.get("status") == "error":
-            return None, got.get("error") or "transcription failed"
-    return None, "timed out"
+        if got.get("error"):
+            return None, AAI_REFUSED
+        tid = got.get("id")
+
+        # 3. POLL, ON THE SAME KEY, and survive the line going down.
+        #
+        # A FAILED POLL IS NOT A FAILED JOB. The work continues on their
+        # side, so a dropped connection keeps asking rather than abandoning
+        # a transcript that is already being made and already charged for.
+        t0 = time.time()
+        misses = 0
+        while time.time() - t0 < 3600:
+            time.sleep(3)
+            r, v = aai_call("GET", "/transcript/" + tid, key, timeout=60)
+            if v or r is None:
+                misses += 1
+                if misses > 100:
+                    return None, AAI_UNKNOWN
+                if on_note:
+                    on_note("line dropped, still waiting…")
+                time.sleep(3)
+                continue
+            misses = 0
+            s_ = r.json()
+            if s_.get("status") == "completed":
+                return s_, ""
+            if s_.get("status") == "error":
+                # THEIR verdict on this audio, not on the key. Another key
+                # would fail the same way, so this is not a ring problem.
+                return None, AAI_REFUSED
+        return None, AAI_UNKNOWN
+
+    got, err = aai_one_file(whole_file, on_note)
+    if got is None:
+        return None, err or "failed"
+    return got, ""
