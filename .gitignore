@@ -1,0 +1,22 @@
+# COMPILED BYTECODE MUST NEVER BE COMMITTED.
+#
+# On 17.9.2026 a `git add -A` swept __pycache__/engine.cpython-312.pyc into
+# the repository, and the deployed app then failed with an ImportError on
+# `from engine import run_transcription` — a name that is plainly there in
+# the source.
+#
+# A .pyc carries the Python version in its name and a magic number inside
+# it. Whether it is used, ignored, or shadows the source depends on which
+# Python the server happens to run, which is not something a repository
+# should ever leave to chance.
+#
+# It is also the exact trap written into MANTRA_MANIFEST as
+# checking-the-checks.md face 7: stale bytecode gives results that exist
+# nowhere in the source.
+__pycache__/
+*.pyc
+*.pyo
+
+# Never a secret, never a key file.
+.streamlit/secrets.toml
+*.key

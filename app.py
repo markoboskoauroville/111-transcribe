@@ -25,8 +25,27 @@ from google.oauth2.service_account import Credentials
 # IMPORTED UNDER A DIFFERENT NAME because app.py already has a
 # run_transcription — its button handler. Two functions with one name is a
 # collision pyflakes catches and a reader does not.
-from engine import aai_keys                                 # noqa: E402
-from engine import run_transcription as engine_run          # noqa: E402
+# A MISSING MODULE MUST SAY SO, NOT SHOW A REDACTED ImportError.
+#
+# On 17.9.2026 the deployed app died here with "ImportError ... original
+# error message is redacted to prevent data leaks", which tells the person
+# looking at it precisely nothing. The cause was a __pycache__ directory
+# swept into the repository by a `git add -A` of mine.
+#
+# The import is guarded now so the page still draws and NAMES the problem.
+# Streamlit redacts the exception text, so the app has to supply its own.
+try:
+    from engine import aai_keys                             # noqa: E402
+    from engine import run_transcription as engine_run      # noqa: E402
+    ENGINE_ERROR = ""
+except Exception as _exc:                                   # noqa: BLE001
+    ENGINE_ERROR = "%s: %s" % (type(_exc).__name__, _exc)
+
+    def aai_keys():
+        return []
+
+    def engine_run(*_a, **_kw):
+        raise RuntimeError(ENGINE_ERROR)
 
 API_KEY = (aai_keys() or [""])[0]
 HEADERS = {"authorization": API_KEY}
@@ -378,6 +397,12 @@ APP_PASSWORD = str(st.secrets.get("APP_PASSWORD", "") or "")
 
 
 def _door():
+    if ENGINE_ERROR:
+        # BEFORE THE PASSWORD, because a broken engine is not a locked
+        # door and pretending otherwise wastes somebody's time typing.
+        st.error("The transcription engine did not load.\n\n" + ENGINE_ERROR)
+        st.caption("engine.py is missing or failed to import on the server.")
+        st.stop()
     if st.session_state.get("_in"):
         return
     st.markdown("### 🎙️ " + cfg["app_title"])
