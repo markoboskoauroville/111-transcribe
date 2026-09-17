@@ -29,7 +29,7 @@ from google.oauth2.service_account import Credentials
 # accident.
 #
 # ONE NAME, AT THE TOP, WHERE SOMEBODY CHANGING A VERSION WILL SEE IT.
-APP_VERSION = "v3.13"
+APP_VERSION = "v3.14"
 
 # ── Secrets ───────────────────────────────────────────────────────────────────
 # ONE KEY WAS A HARD REQUIREMENT HERE — st.secrets["..."] with square
@@ -1278,42 +1278,78 @@ setTimeout(function(){{m.style.display='none';}},2000);}}</script>"""
         # Reflect cache state set by the callback
         has_cache = bool(st.session_state.get("_cached_file_name"))
 
-    # ─── SETTINGS (always visible — used by Transcribe AND Re-Transcribe) ─────
-    lang_choice = st.radio("Language", ["Hrvatski", "English", "Auto detect"],
-                           horizontal=True, key="lang_radio")
-    st.session_state["_lang_choice"] = lang_choice
-
-    tc_opt = st.radio("Timecode", ["Off", "On"], horizontal=True, key="tc_radio")
-    st.session_state["_include_timecode"] = tc_opt == "On"
-
-    # WHO IS SPEAKING (17.9.2026). Off by default, because it costs speed:
-    # the whole recording has to go as one job for the labels to mean the
-    # same thing from beginning to end, which gives up the six-way parallel
-    # that makes this app quick.
-    # DETECT FIRST, SO IT IS THE DEFAULT. Baba, 17.9.2026: "speaker
-    # detection is default. First comes Detect and then second is Off."
+    # ─── SETTINGS, FOLDED AWAY ───────────────────────────────────────────────
     #
-    # A radio takes its first option unless told otherwise, so the order IS
-    # the default — there is no separate setting to keep in step with it.
-    # Most of what goes through this app is an interview or a piece with
-    # several voices, and the one case that does not need it, a voiceover
-    # read by one person, costs nothing: one speaker is found and the
-    # labels are dropped on the way out.
-    sp_opt = st.radio("Speakers", ["Detect", "Off"], horizontal=True,
-                      key="sp_radio")
-    st.session_state["_speakers"] = sp_opt == "Detect"
-    if sp_opt == "Detect":
-        how_many = st.radio(
-            "How many voices", ["I don't know", "2", "3", "4", "5", "6"],
-            horizontal=True, key="sp_count")
-        # A NUMBER IS A HARD BOUNDARY, NOT A HINT: their model merges extra
-        # people into the labels it is allowed, so a wrong count is worse
-        # than none. "I don't know" is the honest default.
-        st.session_state["_speaker_count"] = (
-            int(how_many) if how_many.isdigit() else 0)
-        st.caption("Slower: the whole recording goes as one job so the "
-                   "labels hold throughout. Each voice needs about half a "
-                   "minute of speech to be recognised.")
+    # Baba, 17.9.2026: "settings should be collapsible because defaults are
+    # good. All languages advanced should be in the section of languages."
+    #
+    # Five rows of radios stood between him and the one button he presses,
+    # and on a phone that is most of a screen to scroll past every time.
+    # The defaults are Croatian, no timecode, speakers detected — which is
+    # what he wants nearly always.
+    #
+    # THE TITLE CARRIES THE CURRENT CHOICES, so the panel says what is
+    # inside it without being opened. A folded panel that hides what it is
+    # set to would turn every transcription into a guess about whether the
+    # language is still right.
+    _cur_lang = st.session_state.get("lang_radio", "Hrvatski")
+    _cur_spk = st.session_state.get("sp_radio", "Detect")
+    _cur_tc = st.session_state.get("tc_radio", "Off")
+    _summary = "Settings — %s · speakers %s%s" % (
+        _cur_lang, _cur_spk.lower(),
+        " · timecode on" if _cur_tc == "On" else "")
+    with st.expander(_summary, expanded=False):
+        lang_choice = st.radio("Language", ["Hrvatski", "English", "Auto detect"],
+                               horizontal=True, key="lang_radio")
+        st.session_state["_lang_choice"] = lang_choice
+
+        # THE LONG LIST BELONGS WITH THE LANGUAGE, and it was sitting under
+        # the Transcribe button. That was not only untidy: it ran AFTER the
+        # transcription on the same pass, so a language chosen here only
+        # took effect on the NEXT press. Whoever used it once and got
+        # Croatian anyway would have blamed the app and been right.
+        with st.expander("All languages (advanced)", expanded=False):
+            ext_lang = st.selectbox(
+                "Select any language for transcription",
+                ["— use primary selector above —"]
+                + sorted(EXTENDED_LANGUAGE_MAP.keys()),
+                key="ext_lang_sel")
+            if ext_lang != "— use primary selector above —":
+                st.session_state["_lang_choice"] = ext_lang
+                st.info("Set to: %s (%s)"
+                        % (ext_lang, EXTENDED_LANGUAGE_MAP.get(ext_lang, "")))
+
+        tc_opt = st.radio("Timecode", ["Off", "On"], horizontal=True, key="tc_radio")
+        st.session_state["_include_timecode"] = tc_opt == "On"
+
+        # WHO IS SPEAKING (17.9.2026). Off by default, because it costs speed:
+        # the whole recording has to go as one job for the labels to mean the
+        # same thing from beginning to end, which gives up the six-way parallel
+        # that makes this app quick.
+        # DETECT FIRST, SO IT IS THE DEFAULT. Baba, 17.9.2026: "speaker
+        # detection is default. First comes Detect and then second is Off."
+        #
+        # A radio takes its first option unless told otherwise, so the order IS
+        # the default — there is no separate setting to keep in step with it.
+        # Most of what goes through this app is an interview or a piece with
+        # several voices, and the one case that does not need it, a voiceover
+        # read by one person, costs nothing: one speaker is found and the
+        # labels are dropped on the way out.
+        sp_opt = st.radio("Speakers", ["Detect", "Off"], horizontal=True,
+                          key="sp_radio")
+        st.session_state["_speakers"] = sp_opt == "Detect"
+        if sp_opt == "Detect":
+            how_many = st.radio(
+                "How many voices", ["I don't know", "2", "3", "4", "5", "6"],
+                horizontal=True, key="sp_count")
+            # A NUMBER IS A HARD BOUNDARY, NOT A HINT: their model merges extra
+            # people into the labels it is allowed, so a wrong count is worse
+            # than none. "I don't know" is the honest default.
+            st.session_state["_speaker_count"] = (
+                int(how_many) if how_many.isdigit() else 0)
+            st.caption("Slower: the whole recording goes as one job so the "
+                       "labels hold throughout. Each voice needs about half a "
+                       "minute of speech to be recognised.")
 
     if not has_transcript:
         input_mode = st.radio("Source", ["Upload", "Rec"], horizontal=True)
@@ -1337,15 +1373,6 @@ setTimeout(function(){{m.style.display='none';}},2000);}}</script>"""
         if st.button(btn_label, use_container_width=True, key="do_transcribe"):
             run_transcription()
 
-    # ─── EXPANDED LANGUAGE LIST ───────────────────────────────────────────────
-    with st.expander("All languages (advanced)", expanded=False):
-        ext_lang = st.selectbox(
-            "Select any language for transcription",
-            ["— use primary selector above —"] + sorted(EXTENDED_LANGUAGE_MAP.keys()),
-            key="ext_lang_sel")
-        if ext_lang != "— use primary selector above —":
-            st.session_state["_lang_choice"] = ext_lang
-            st.info(f"Set to: {ext_lang} ({EXTENDED_LANGUAGE_MAP.get(ext_lang, '')})")
 
 
 # ─────────────────────────────────────────────────────
