@@ -17,6 +17,20 @@ from pathlib import Path
 import gspread
 from google.oauth2.service_account import Credentials
 
+# ── Version ───────────────────────────────────────────────────────────────────
+#
+# Baba, 17.9.2026: "every time you finish a version, print the version number
+# here so I can check visually."
+#
+# THE BADGE SAID v3.3 THROUGH NINE VERSIONS. It was a literal buried in the
+# middle of an HTML string, so every version after it was named in a commit
+# message and nowhere he could see. His check would have compared a number
+# on his phone against a number in a message and found them equal only by
+# accident.
+#
+# ONE NAME, AT THE TOP, WHERE SOMEBODY CHANGING A VERSION WILL SEE IT.
+APP_VERSION = "v3.13"
+
 # ── Secrets ───────────────────────────────────────────────────────────────────
 # ONE KEY WAS A HARD REQUIREMENT HERE — st.secrets["..."] with square
 # brackets raises if it is missing, so a deployment without that exact
@@ -389,7 +403,7 @@ function changeSpeed(){{audio.playbackRate=parseFloat(document.getElementById('s
 st.set_page_config(page_title=cfg["app_title"], page_icon="🎙️", layout="centered")
 st.markdown(
     '<div style="position:fixed;top:8px;right:12px;color:#555;font-size:11px;'
-    'z-index:9999;font-family:monospace;">v3.3</div>',
+    'z-index:9999;font-family:monospace;">' + APP_VERSION + '</div>',
     unsafe_allow_html=True)
 
 # ── The door ──────────────────────────────────────────────────────────────────
