@@ -18,8 +18,17 @@ import gspread
 from google.oauth2.service_account import Credentials
 
 # ── Secrets ───────────────────────────────────────────────────────────────────
-API_KEY        = st.secrets["ASSEMBLYAI_API_KEY"]
-HEADERS        = {"authorization": API_KEY}
+# ONE KEY WAS A HARD REQUIREMENT HERE — st.secrets["..."] with square
+# brackets raises if it is missing, so a deployment without that exact
+# name died on line 21 with a KeyError and no page at all. The ring reads
+# both names and decides at call time; see engine.aai_keys.
+from engine import (                                        # noqa: E402
+    aai_keys, aai_try, aai_call, transcribe_chunk, to_opus_chunks,
+    media_seconds, ffmpeg_ok, SPINNER, CHUNK_SECONDS, MAX_PARALLEL,
+    _human_bytes, _human_time)
+
+API_KEY = (aai_keys() or [""])[0]
+HEADERS = {"authorization": API_KEY}
 # ADMIN_PASSWORD was read here and used NOWHERE in 1,343 lines, with a
 # default of "admin123". Removed with the gate that replaces it: a
 # variable that looks like a password check and is not one is worse than

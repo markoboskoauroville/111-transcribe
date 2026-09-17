@@ -7,3 +7,19 @@ textColor = "#e0e0e0"
 
 [browser]
 gatherUsageStats = false
+
+# ── Upload size ───────────────────────────────────────────────────────────────
+#
+# Baba, 17.9.2026: "there is 200 megabytes limitation on Streamlit, but you
+# must have a file splitter so any file size can be uploaded."
+#
+# A SPLITTER INSIDE THE APP CANNOT GET PAST THIS. Streamlit uploads the WHOLE
+# file to the server before app.py sees a single byte, so any splitting we do
+# happens after the limit has already refused the file. The cap is here, and
+# it is simply a number.
+#
+# 2000 MB is chosen against the measured compression: his Croatian voiceover
+# encodes to 6.8 MB per hour of Opus, so the limit only binds on the ORIGINAL
+# upload — a two-hour ProRes rush, not the audio we send onward.
+[server]
+maxUploadSize = 2000
