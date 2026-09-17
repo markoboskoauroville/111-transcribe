@@ -34,9 +34,24 @@ from google.oauth2.service_account import Credentials
 #
 # The import is guarded now so the page still draws and NAMES the problem.
 # Streamlit redacts the exception text, so the app has to supply its own.
+# THE MODULE IS RENAMED, AND THAT RENAME IS THE FIX.
+#
+# The server kept failing with "cannot import name 'run_transcription'
+# from 'engine'" while the source on that exact path plainly defined it at
+# module level. The cause was STALE BYTECODE: Streamlit Cloud runs Python
+# 3.14 and had a __pycache__/engine.cpython-314.pyc left from v3.6, when
+# engine.py had no run_transcription yet. Pulling new source did not
+# dislodge it.
+#
+# I MADE THAT POSSIBLE by committing a __pycache__ directory in v3.7 with
+# a `git add -A`. It is removed and ignored now, but a cached .pyc already
+# sitting on the server is not something a git push can reach.
+#
+# A NEW MODULE NAME HAS NO CACHED BYTECODE. Nothing else about the file
+# changed.
 try:
-    from engine import aai_keys                             # noqa: E402
-    from engine import run_transcription as engine_run      # noqa: E402
+    from transcribe_engine import aai_keys                  # noqa: E402
+    from transcribe_engine import run_transcription as engine_run
     ENGINE_ERROR = ""
 except Exception as _exc:                                   # noqa: BLE001
     ENGINE_ERROR = "%s: %s" % (type(_exc).__name__, _exc)
@@ -401,7 +416,7 @@ def _door():
         # BEFORE THE PASSWORD, because a broken engine is not a locked
         # door and pretending otherwise wastes somebody's time typing.
         st.error("The transcription engine did not load.\n\n" + ENGINE_ERROR)
-        st.caption("engine.py is missing or failed to import on the server.")
+        st.caption("transcribe_engine.py is missing or failed to import on the server.")
         st.stop()
     if st.session_state.get("_in"):
         return
