@@ -29,7 +29,7 @@ from google.oauth2.service_account import Credentials
 # accident.
 #
 # ONE NAME, AT THE TOP, WHERE SOMEBODY CHANGING A VERSION WILL SEE IT.
-APP_VERSION = "v3.15"
+APP_VERSION = "v3.16"
 
 # ── Secrets ───────────────────────────────────────────────────────────────────
 # ONE KEY WAS A HARD REQUIREMENT HERE — st.secrets["..."] with square

@@ -321,7 +321,8 @@ def media_seconds(path):
 
 # ── One chunk, end to end ─────────────────────────────────────────────────────
 
-def transcribe_chunk(path, lang_params, on_note=None, extra=None):
+def transcribe_chunk(path, lang_params, on_note=None, extra=None,
+                     on_tick=None):
     """One audio file, start to finished text, on ONE key.
 
     Every step below uses the SAME key by construction — see aai_one_file
@@ -362,7 +363,23 @@ def transcribe_chunk(path, lang_params, on_note=None, extra=None):
         t0 = time.time()
         misses = 0
         while time.time() - t0 < 3600:
-            time.sleep(3)
+            # THE SPINNER TURNS WHILE WE WAIT. Baba, 17.9.2026: "while the
+            # app is working the Braille spinner should also rotate. Now
+            # it's standing, it stopped."
+            #
+            # It stood still because the whole-file path — which speaker
+            # detection uses, and that is now the default — drew SPINNER[0]
+            # once and then sat inside this poll loop for a minute saying
+            # nothing. A spinner that does not move is worse than no
+            # spinner: it says the app has hung.
+            #
+            # Drawn HERE, in the only place that knows the work is still
+            # going on, so both paths animate without either of them
+            # having to remember to.
+            for _ in range(6):
+                if on_tick:
+                    on_tick()
+                time.sleep(0.5)
             r, v = aai_call("GET", "/transcript/" + tid, key, timeout=60)
             if v or r is None:
                 misses += 1
@@ -416,8 +433,16 @@ def _run_one_piece(raw_bytes, filename, lang_params, ui, speakers, t_start):
     if isinstance(speakers, int) and speakers > 1:
         extra["speakers_expected"] = speakers
 
+    _frame = [0]
+
+    def _tick():
+        _frame[0] += 1
+        ui.status("%s  transcribing %s  ·  %s elapsed"
+                  % (SPINNER[_frame[0] % len(SPINNER)],
+                     _human_time(audio_s), _human_time(time.time() - t_start)))
+
     got, err = transcribe_chunk(parts[0], lang_params, on_note=ui.note,
-                                extra=extra)
+                                extra=extra, on_tick=_tick)
     for p in parts:
         try:
             os.remove(p)
