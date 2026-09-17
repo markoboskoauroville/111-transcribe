@@ -305,7 +305,7 @@ def media_seconds(path):
 
 # ── One chunk, end to end ─────────────────────────────────────────────────────
 
-def transcribe_chunk(path, lang_params, on_note=None):
+def transcribe_chunk(path, lang_params, on_note=None, extra=None):
     """One audio file, start to finished text, on ONE key.
 
     Every step below uses the SAME key by construction — see aai_one_file
@@ -314,7 +314,7 @@ def transcribe_chunk(path, lang_params, on_note=None):
     data = open(path, "rb").read()
     body_base = {"punctuate": True, "format_text": True,
                  "speech_models": ["universal-3-pro", "universal-2"],
-                 **lang_params}
+                 **lang_params, **(extra or {})}
 
     def whole_file(key):
         # 1. UPLOAD
@@ -372,9 +372,57 @@ def transcribe_chunk(path, lang_params, on_note=None):
     return got, ""
 
 
+def _run_one_piece(raw_bytes, filename, lang_params, ui, speakers, t_start):
+    """The whole recording as one job, so the speaker labels hold throughout.
+
+    Returns (text, utterances) where utterances is AssemblyAI's own list:
+    each one a stretch of speech by a single speaker, with `speaker` as a
+    capital letter, `text`, and `start`/`end` in milliseconds.
+    """
+    if not ffmpeg_ok():
+        raise RuntimeError("ffmpeg is not installed on this server.")
+
+    ui.status("%s reading the file…" % SPINNER[0])
+    ui.note("input: %s, %s" % (filename, _human_bytes(len(raw_bytes))))
+    ui.note("speakers asked for: the whole file goes as one job, so the "
+            "labels are the same from start to end")
+
+    # One piece, however long it is: CHUNK_SECONDS is set absurdly high so
+    # the same compression path runs and produces a single file.
+    parts, _src = to_opus_chunks(raw_bytes, filename, seconds=10 ** 7,
+                                 note=ui.note)
+    audio_s = sum(media_seconds(p) for p in parts)
+    ui.note("audio length %s in %d piece" % (_human_time(audio_s), len(parts)))
+
+    extra = {"speaker_labels": True}
+    # HARD BOUNDARIES, NOT HINTS, which is why a wrong number is worse than
+    # none: a maximum that is too low merges two people into one label.
+    if isinstance(speakers, int) and speakers > 1:
+        extra["speakers_expected"] = speakers
+
+    got, err = transcribe_chunk(parts[0], lang_params, on_note=ui.note,
+                                extra=extra)
+    for p in parts:
+        try:
+            os.remove(p)
+        except Exception:
+            pass
+    if err or got is None:
+        raise RuntimeError("that recording could not be transcribed: %s" % err)
+
+    utterances = got.get("utterances") or []
+    text = got.get("text") or ""
+    heard = sorted({u.get("speaker", "?") for u in utterances})
+    ui.status("done  ·  %s  ·  %d words  ·  %d speaker%s"
+              % (_human_time(time.time() - t_start), len(text.split()),
+                 len(heard), "" if len(heard) == 1 else "s"))
+    ui.note("speakers heard: %s" % (", ".join(heard) or "none"))
+    return text, utterances
+
+
 # ── The run ───────────────────────────────────────────────────────────────────
 
-def run_transcription(raw_bytes, filename, lang_params, ui):
+def run_transcription(raw_bytes, filename, lang_params, ui, speakers=None):
     """The whole job, reporting as it goes. Returns the full text.
 
     Baba, 17.9.2026: "each segment is progressively added to the text box
@@ -395,6 +443,22 @@ def run_transcription(raw_bytes, filename, lang_params, ui):
     reads is always the recording in the order it was spoken.
     """
     t_start = time.time()
+
+    # WHO IS SPEAKING, AND WHY IT CANNOT BE SPLIT (17.9.2026).
+    #
+    # This app cuts audio into ten-minute pieces and runs six at once, which
+    # is what makes it fast. Speaker labels cannot survive that: each request
+    # is a separate job, so "Speaker A" in the third piece is whoever spoke
+    # first in the third piece, and that is a different person from the A in
+    # the first piece as often as not. Stitching them would produce a
+    # transcript that looks right and is wrong, which is worse than slow.
+    #
+    # So when he asks for speakers, the whole recording goes as ONE job.
+    # Slower — no six-way parallel — and correct, with one set of labels from
+    # beginning to end. AssemblyAI takes hours-long files.
+    if speakers:
+        return _run_one_piece(raw_bytes, filename, lang_params, ui, speakers,
+                              t_start)
 
     if not ffmpeg_ok():
         raise RuntimeError("ffmpeg is not installed on this server.")
@@ -464,4 +528,6 @@ def run_transcription(raw_bytes, filename, lang_params, ui):
             os.remove(p)
         except Exception:
             pass
-    return text
+    # Without speakers there are no utterances; the shape stays the same so
+    # the caller never has to ask which kind of run it got.
+    return text, []

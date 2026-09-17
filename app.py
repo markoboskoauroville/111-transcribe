@@ -630,6 +630,39 @@ def ms_to_tc(ms):
     total_s = ms // 1000
     return f"{total_s//3600:02d}:{(total_s%3600)//60:02d}:{total_s%60:02d}.{(ms%1000)//10:02d}"
 
+
+def speaker_text(utterances, names, with_timecode=False):
+    """The transcript as speech, with whatever he has called each voice.
+
+    AssemblyAI hands back letters — A, B, C — and a letter is not a person.
+    This is where a letter becomes "Marinko" or "the mayor", and the
+    transcript is rebuilt from the utterances every time a name changes, so
+    renaming somebody in the middle of reading costs nothing.
+    """
+    lines = []
+    for u in utterances:
+        who = u.get("speaker", "?")
+        label = (names.get(who) or "").strip() or ("Speaker %s" % who)
+        said = (u.get("text") or "").strip()
+        if not said:
+            continue
+        if with_timecode:
+            lines.append("[%s]  %s: %s" % (ms_to_tc(u.get("start", 0)), label, said))
+        else:
+            lines.append("%s: %s" % (label, said))
+    return "\n\n".join(lines)
+
+
+def speakers_heard(utterances):
+    """Every voice in the recording, in the order it was first heard."""
+    seen = []
+    for u in utterances:
+        who = u.get("speaker")
+        if who and who not in seen:
+            seen.append(who)
+    return seen
+
+
 def upload_with_progress(audio_bytes):
     CHUNK=32768; total=len(audio_bytes); uploaded=0; start=time.time()
     pbar=st.progress(0.0, text="Uploading...")
@@ -651,7 +684,7 @@ def upload_with_progress(audio_bytes):
     return resp.json()["upload_url"]
 
 def transcribe(audio_bytes, filename="audio", lang_choice="Auto detect",
-               include_timecode=False):
+               include_timecode=False, speakers=False, speaker_count=0):
     """The whole job, shown as it happens.
 
     THE OLD VERSION DID ONE UPLOAD AND ONE POLL LOOP on a single hard-coded
@@ -697,7 +730,9 @@ def transcribe(audio_bytes, filename="audio", lang_choice="Auto detect",
                             unsafe_allow_html=True)
 
     try:
-        result_text = engine_run(audio_bytes, filename, lang_params, _UI())
+        result_text, utterances = engine_run(
+            audio_bytes, filename, lang_params, _UI(),
+            speakers=(speaker_count or True) if speakers else None)
     except Exception as exc:                                 # noqa: BLE001
         # A FAILURE IS A SENTENCE, NEVER SILENCE. The worst bug this app
         # family ever had was a control that did nothing at all.
@@ -710,6 +745,7 @@ def transcribe(audio_bytes, filename="audio", lang_choice="Auto detect",
         st.warning("Nothing was recognised in that audio.")
     poll = {"text": result_text, "language_code": lang_params.get(
         "language_code", "")}
+    st.session_state["_utterances"] = utterances
 
     detected_code  = poll.get("language_code", "")
     detected_label = CODE_TO_LABEL.get(detected_code, detected_code.upper())
@@ -972,7 +1008,10 @@ with tab1:
         _bytes = st.session_state["_cached_file_bytes"]
         _name  = st.session_state["_cached_file_name"]
         try:
-            result_text, dur, det_code, det_label = transcribe(_bytes, _name, _lc, _tc)
+            _sp = st.session_state.get("_speakers", False)
+            _spn = st.session_state.get("_speaker_count", 0)
+            result_text, dur, det_code, det_label = transcribe(
+                _bytes, _name, _lc, _tc, speakers=_sp, speaker_count=_spn)
             st.session_state.transcript_text   = result_text
             st.session_state.tts_input         = result_text
             st.session_state.detected_lang     = det_code
@@ -991,6 +1030,39 @@ with tab1:
             st.error(f"HTTP error: {e.response.status_code} — {e.response.text}")
         except Exception as e:
             st.error(f"Error: {str(e)}")
+
+    # ─── WHO IS SPEAKING ──────────────────────────────────────────────────────
+    #
+    # One row per voice: how much it said, and a box to name it. Naming is
+    # what makes a diarised transcript usable — "Speaker B" is no better than
+    # a letter when he is cutting an interview at midnight.
+    _utts = st.session_state.get("_utterances") or []
+    if _utts:
+        heard = speakers_heard(_utts)
+        st.markdown("**Speakers** — name them and the transcript follows")
+        names = st.session_state.setdefault("_speaker_names", {})
+        for who in heard:
+            mine = [u for u in _utts if u.get("speaker") == who]
+            said = sum(len((u.get("text") or "").split()) for u in mine)
+            first = ms_to_tc(mine[0].get("start", 0)) if mine else "00:00:00.00"
+            cols = st.columns([1, 2, 3])
+            with cols[0]:
+                st.markdown("**%s**" % who)
+            with cols[1]:
+                st.caption("%d words · first at %s" % (said, first))
+            with cols[2]:
+                names[who] = st.text_input(
+                    "name for %s" % who, value=names.get(who, ""),
+                    key="_spname_%s" % who, label_visibility="collapsed",
+                    placeholder="Speaker %s" % who)
+        rebuilt = speaker_text(_utts, names,
+                               st.session_state.get("_include_timecode", False))
+        if rebuilt and rebuilt != st.session_state.get("transcript_text", ""):
+            if st.button("apply the names to the transcript"):
+                st.session_state.transcript_text = rebuilt
+                st.session_state.tts_input = rebuilt
+                st.session_state["_tx_version"] = st.session_state.get("_tx_version", 0) + 1
+                st.rerun()
 
     # ─── POST-TRANSCRIPT VIEW ─────────────────────────────────────────────────
     if has_transcript:
@@ -1109,6 +1181,26 @@ setTimeout(function(){{m.style.display='none';}},2000);}}</script>"""
 
     tc_opt = st.radio("Timecode", ["Off", "On"], horizontal=True, key="tc_radio")
     st.session_state["_include_timecode"] = tc_opt == "On"
+
+    # WHO IS SPEAKING (17.9.2026). Off by default, because it costs speed:
+    # the whole recording has to go as one job for the labels to mean the
+    # same thing from beginning to end, which gives up the six-way parallel
+    # that makes this app quick.
+    sp_opt = st.radio("Speakers", ["Off", "Detect"], horizontal=True,
+                      key="sp_radio")
+    st.session_state["_speakers"] = sp_opt == "Detect"
+    if sp_opt == "Detect":
+        how_many = st.radio(
+            "How many voices", ["I don't know", "2", "3", "4", "5", "6"],
+            horizontal=True, key="sp_count")
+        # A NUMBER IS A HARD BOUNDARY, NOT A HINT: their model merges extra
+        # people into the labels it is allowed, so a wrong count is worse
+        # than none. "I don't know" is the honest default.
+        st.session_state["_speaker_count"] = (
+            int(how_many) if how_many.isdigit() else 0)
+        st.caption("Slower: the whole recording goes as one job so the "
+                   "labels hold throughout. Each voice needs about half a "
+                   "minute of speech to be recognised.")
 
     if not has_transcript:
         input_mode = st.radio("Source", ["Upload", "Rec"], horizontal=True)
