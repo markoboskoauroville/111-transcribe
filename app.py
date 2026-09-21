@@ -82,7 +82,16 @@ HEADERS = {"authorization": API_KEY}
 # default of "admin123". Removed with the gate that replaces it: a
 # variable that looks like a password check and is not one is worse than
 # no check at all, because it stops anybody asking where the check is.
-SETTINGS_FILE  = Path("/tmp/Marko_settings.json")
+# RENAMED WITH THE APP, 21.9.2026, and the rename does a second job worth knowing about.
+#
+# `app_title` is a SAVED setting with a default, so a settings file already on disk holding
+# "Marko TRANSCRIBE" would go on winning over the new default and the old name would survive the
+# rename. Moving the file means the old one is simply not found, the default applies, and the
+# title is right on the next run.
+#
+# Nothing is lost by that. This lives in /tmp, which Streamlit Cloud wipes on every restart, so
+# the file is a within-session cache rather than storage.
+SETTINGS_FILE  = Path("/tmp/111_settings.json")
 
 def load_settings():
     if SETTINGS_FILE.exists():
@@ -92,7 +101,7 @@ def load_settings():
             pass
     return {
         "sheet_url": st.secrets.get("GOOGLE_SHEET_URL", ""),
-        "app_title": "Marko TRANSCRIBE",
+        "app_title": "111 TRANSCRIBE",
     }
 
 def save_settings(s):
