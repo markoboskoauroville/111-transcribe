@@ -4,18 +4,11 @@ import time
 import os
 import json
 import asyncio
-import base64
 import threading
 import re
-import ipaddress
 import hmac
 import subprocess
 import tempfile
-from datetime import datetime
-from pathlib import Path
-
-import gspread
-from google.oauth2.service_account import Credentials
 
 # ── Version ───────────────────────────────────────────────────────────────────
 #
@@ -64,211 +57,64 @@ APP_VERSION = "v3.16"
 # A NEW MODULE NAME HAS NO CACHED BYTECODE. Nothing else about the file
 # changed.
 try:
-    from transcribe_engine import aai_keys                  # noqa: E402
     from transcribe_engine import run_transcription as engine_run
     ENGINE_ERROR = ""
 except Exception as _exc:                                   # noqa: BLE001
     ENGINE_ERROR = "%s: %s" % (type(_exc).__name__, _exc)
 
-    def aai_keys():
-        return []
-
     def engine_run(*_a, **_kw):
         raise RuntimeError(ENGINE_ERROR)
 
-API_KEY = (aai_keys() or [""])[0]
-HEADERS = {"authorization": API_KEY}
+# API_KEY AND HEADERS WERE HERE AND ARE GONE, 21.9.2026. They took the FIRST key off the ring at
+# import time and built an authorization header from it, which was how the app talked to
+# AssemblyAI before the engine existed. The engine owns the ring now and chooses a key per piece,
+# so a header built once at startup could only ever have been the wrong one — and nothing read it
+# except the dead uploader below it.
 # ADMIN_PASSWORD was read here and used NOWHERE in 1,343 lines, with a
 # default of "admin123". Removed with the gate that replaces it: a
 # variable that looks like a password check and is not one is worse than
 # no check at all, because it stops anybody asking where the check is.
-# RENAMED WITH THE APP, 21.9.2026, and the rename does a second job worth knowing about.
+# THE SETTINGS FILE IS GONE, AND IT WENT WITH GOOGLE RATHER THAN BEING TIDIED AWAY.
 #
-# `app_title` is a SAVED setting with a default, so a settings file already on disk holding
-# "Marko TRANSCRIBE" would go on winning over the new default and the old name would survive the
-# rename. Moving the file means the old one is simply not found, the default applies, and the
-# title is right on the next run.
+# It held exactly two values: the sheet URL and the title. With the sheet removed, one remained,
+# and it was never written by anything — `save_settings` was only ever called by the balance
+# calibration, which the sheet also fed. So the whole apparatus was a JSON file in /tmp, two
+# functions and a try/except, standing behind a single string constant.
 #
-# Nothing is lost by that. This lives in /tmp, which Streamlit Cloud wipes on every restart, so
-# the file is a within-session cache rather than storage.
-SETTINGS_FILE  = Path("/tmp/111_settings.json")
+# It also could not work on Streamlit Cloud, which wipes /tmp on every restart. A cache that is
+# always cold is not a cache; it is a file nobody reads.
+APP_TITLE = "111 TRANSCRIBE"
 
-def load_settings():
-    if SETTINGS_FILE.exists():
-        try:
-            return json.loads(SETTINGS_FILE.read_text())
-        except:
-            pass
-    return {
-        "sheet_url": st.secrets.get("GOOGLE_SHEET_URL", ""),
-        "app_title": "111 TRANSCRIBE",
-    }
+# ── WHAT STOOD HERE, AND WHY ITS REMOVAL IS A FEATURE ────────────────────────────────
+#
+# Four functions — is_private, get_client_ip, get_ip_info, detect_owner — plus format_duration,
+# which nothing called at all.
+#
+# NONE OF THEM SERVED THE PERSON USING THE APP. They existed to fill six columns of the Google
+# Sheet: ip, city, country, org, isp, owner. Every transcription sent the visitor's IP address
+# to ip-api.com, a third party, to find out which broadcaster they worked for.
+#
+# With the sheet gone there is nothing to fill, so this is not a loss of function — it is the
+# removal of a network call to a third party, made on every run, about a person, that nobody
+# downstream was going to read.
 
-def save_settings(s):
-    SETTINGS_FILE.write_text(json.dumps(s, ensure_ascii=False))
+# ── TWO DEAD FUNCTIONS REMOVED, 21.9.2026 ────────────────────────────────────────────
+#
+# Neither was called from anywhere, in either file, and both predate this change — they are
+# not casualties of removing Google, they are what removing Google made visible.
+#
+#   ensure_mono(audio_bytes, filename)     44 lines. Shelled out to ffmpeg to fold stereo down
+#                                          to mono before upload. AssemblyAI does that itself
+#                                          and charges by duration, not by channel, so it
+#                                          bought nothing and cost a subprocess per file.
+#
+#   build_tts_player(text, audio_b64, ..)  66 lines of inline HTML and JavaScript for a
+#                                          read-along player that highlighted each word as it
+#                                          was spoken. Nothing ever rendered it. It was the
+#                                          only reason `import base64` was here.
+#
+# Kept in the history, where dead code belongs, rather than in the file everybody reads.
 
-cfg = load_settings()
-
-# ── Google Sheets ─────────────────────────────────────────────────────────────
-SCOPES = [
-    "https://www.googleapis.com/auth/spreadsheets",
-    "https://www.googleapis.com/auth/drive",
-]
-
-@st.cache_resource(ttl=300)
-def get_sheet(sheet_url):
-    try:
-        creds  = Credentials.from_service_account_info(
-            dict(st.secrets["gcp_service_account"]), scopes=SCOPES)
-        client = gspread.authorize(creds)
-        ws     = client.open_by_url(sheet_url).sheet1
-        if not ws.row_values(1) or ws.row_values(1)[0] != "date":
-            ws.insert_row([
-                "date","time","filename","lang","duration_sec",
-                "first_words","last_words","ip","city","country",
-                "org","isp","owner","tag"], 1)
-        return ws
-    except:
-        return None
-
-def sheet_append(row_dict):
-    ws = get_sheet(cfg["sheet_url"])
-    if not ws:
-        return
-    try:
-        ws.append_row([
-            row_dict.get("date",""), row_dict.get("time",""),
-            row_dict.get("filename",""), row_dict.get("lang",""),
-            row_dict.get("duration_sec",0), row_dict.get("first_words",""),
-            row_dict.get("last_words",""), row_dict.get("ip",""),
-            row_dict.get("city",""), row_dict.get("country",""),
-            row_dict.get("org",""), row_dict.get("isp",""),
-            row_dict.get("owner",""), row_dict.get("tag",""),
-        ], value_input_option="USER_ENTERED")
-    except:
-        pass
-
-def sheet_load():
-    ws = get_sheet(cfg["sheet_url"])
-    if not ws:
-        return []
-    try:
-        return list(reversed(ws.get_all_records()))
-    except:
-        return []
-
-def sheet_clear_log():
-    ws = get_sheet(cfg["sheet_url"])
-    if not ws:
-        return
-    try:
-        ws.clear()
-        ws.insert_row([
-            "date","time","filename","lang","duration_sec",
-            "first_words","last_words","ip","city","country",
-            "org","isp","owner","tag"], 1)
-    except:
-        pass
-
-# ── IP helpers ────────────────────────────────────────────────────────────────
-def is_private(ip_str):
-    try:
-        return ipaddress.ip_address(ip_str).is_private
-    except:
-        return True
-
-def get_client_ip():
-    try:
-        fwd = st.context.headers.get("X-Forwarded-For", "")
-        if fwd:
-            for candidate in [ip.strip() for ip in fwd.split(",")]:
-                if candidate and not is_private(candidate):
-                    return candidate
-        real = st.context.headers.get("X-Real-IP", "")
-        if real and not is_private(real):
-            return real
-        r = requests.get("https://api.ipify.org?format=json", timeout=4)
-        return r.json().get("ip", "unknown")
-    except:
-        return "unknown"
-
-def get_ip_info(ip):
-    if ip in ("unknown", "127.0.0.1", ""):
-        return {"city":"Local","country":"","org":"localhost","isp":""}
-    try:
-        r = requests.get(
-            f"http://ip-api.com/json/{ip}?fields=status,country,city,org,isp",
-            timeout=5)
-        d = r.json()
-        if d.get("status") == "success":
-            return {"city":d.get("city",""),"country":d.get("country",""),
-                    "org":d.get("org",""),"isp":d.get("isp","")}
-    except:
-        pass
-    return {"city":"","country":"","org":"","isp":""}
-
-def detect_owner(org, isp):
-    combined = (org+" "+isp).lower()
-    if any(k in combined for k in ["nova tv","nova broadcasting","styria","central european media"]):
-        return "NOVA TV","nova"
-    if any(k in combined for k in ["t-hrvatski telekom","htnet","t-com","ht-","croatian telecom","hrvatski telekom"]):
-        return "HT / T-Com (HR)","other"
-    if combined.strip() in ("","localhost"):
-        return "NEPOZNATO","unknown"
-    return (org[:30] if org else isp[:30]),"other"
-
-def format_duration(sec):
-    try:
-        sec = int(sec)
-    except:
-        return "0:00"
-    return f"{sec//60}:{sec%60:02d}"
-
-# ── Stereo → Mono via ffmpeg ──────────────────────────────────────────────────
-def ensure_mono(audio_bytes, filename):
-    ext = os.path.splitext(filename)[-1].lower() or ".mp3"
-    if ext == ".mxf":
-        ext = ".mp4"
-    tmp_in = tmp_out = None
-    try:
-        with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as f:
-            f.write(audio_bytes)
-            tmp_in = f.name
-
-        probe = subprocess.run(
-            ["ffprobe", "-v", "error", "-select_streams", "a:0",
-             "-show_entries", "stream=channels",
-             "-of", "default=noprint_wrappers=1:nokey=1", tmp_in],
-            capture_output=True, text=True)
-        channels = probe.stdout.strip()
-
-        if channels == "1":
-            return audio_bytes, False
-
-        tmp_out = tmp_in + "_mono.mp3"
-        subprocess.run(
-            ["ffmpeg", "-y", "-i", tmp_in,
-             "-ac", "1", "-af", "volume=-6dB", tmp_out],
-            capture_output=True, check=True)
-
-        with open(tmp_out, "rb") as f:
-            result = f.read()
-        return result, True
-
-    except Exception as e:
-        st.warning(f"Mono konverzija nije uspjela ({e}) — šaljem original.")
-        return audio_bytes, False
-    finally:
-        for p in [tmp_in, tmp_out]:
-            if p:
-                try:
-                    os.unlink(p)
-                except:
-                    pass
-
-# ════════════════════════════════════════════════════════════════════════════
-# EDGE TTS
-# ════════════════════════════════════════════════════════════════════════════
 VOICE_MAP = {
     "Hrvatski": {"🚺 Female": "hr-HR-GabrijelaNeural", "🚹 Male": "hr-HR-SreckoNeural"},
     "English":  {"🚺 Female": "en-US-AriaNeural",       "🚹 Male": "en-US-GuyNeural"},
@@ -302,114 +148,8 @@ def generate_tts(text: str, voice: str):
     t.join()
     return result["value"]
 
-def build_tts_player(text: str, audio_b64: str, word_boundaries: list) -> str:
-    tokens   = re.split(r"(\s+)", text)
-    word_idx = 0
-    spans    = ""
-    for tok in tokens:
-        if not tok:
-            continue
-        if re.fullmatch(r"\s+", tok):
-            spans += tok.replace("\n", "<br>")
-        else:
-            spans    += f'<span class="w" data-wi="{word_idx}">{tok}</span>'
-            word_idx += 1
-    wb_json     = json.dumps(word_boundaries)
-    total_words = word_idx
-    return f"""<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8">
-<style>
-  *{{box-sizing:border-box;margin:0;padding:0;}}
-  body{{background:#111;color:#e0e0e0;font-family:'Inter',sans-serif;padding:0;}}
-  #reader{{background:#1a1a1a;border:1px solid #2a2a2a;border-radius:10px;
-    padding:20px 24px;font-size:17px;line-height:2.1;max-height:280px;
-    overflow-y:auto;margin-bottom:14px;color:#ccc;scroll-behavior:smooth;}}
-  #reader::-webkit-scrollbar{{width:3px;}}
-  #reader::-webkit-scrollbar-thumb{{background:#333;border-radius:3px;}}
-  .w{{display:inline;border-radius:3px;padding:1px 2px;margin:0 -1px;
-      transition:background .08s,color .08s;cursor:default;}}
-  .w.read{{color:#555;}}
-  .w.active{{background:#ff6600;color:#000;font-weight:700;border-radius:4px;}}
-  #wp-wrap{{height:4px;background:#1e1e1e;border-radius:2px;margin-bottom:12px;overflow:hidden;}}
-  #wp-fill{{height:100%;background:linear-gradient(90deg,#ff6600,#ffaa00);width:0%;border-radius:2px;transition:width .1s;}}
-  #controls{{display:flex;align-items:center;gap:8px;flex-wrap:wrap;}}
-  .btn{{display:inline-flex;align-items:center;gap:5px;padding:8px 16px;border:none;
-        border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;transition:all .15s;}}
-  #play-btn{{background:#ff6600;color:#000;min-width:100px;justify-content:center;}}
-  #play-btn:hover{{background:#ff8833;}}
-  #stop-btn{{background:#222;color:#888;border:1px solid #333;}}
-  #stop-btn:hover{{background:#2a2a2a;color:#bbb;}}
-  #seek{{flex:1;min-width:100px;-webkit-appearance:none;appearance:none;height:4px;
-         background:#222;border-radius:4px;outline:none;cursor:pointer;}}
-  #seek::-webkit-slider-thumb{{-webkit-appearance:none;width:13px;height:13px;
-    border-radius:50%;background:#ff6600;cursor:pointer;}}
-  #time-lbl{{font-family:monospace;font-size:11px;color:#555;min-width:84px;text-align:right;}}
-  .ctrl-group{{display:flex;align-items:center;gap:5px;}}
-  .ctrl-lbl{{font-size:11px;color:#555;font-family:monospace;}}
-  select{{background:#1a1a1a;color:#aaa;border:1px solid #333;border-radius:6px;
-          padding:5px 8px;font-family:monospace;font-size:11px;cursor:pointer;outline:none;}}
-  #status{{margin-top:8px;font-size:11px;font-family:monospace;color:#444;text-align:right;}}
-</style></head><body>
-<div id="wp-wrap"><div id="wp-fill"></div></div>
-<div id="reader">{spans}</div>
-<div id="controls">
-  <button class="btn" id="play-btn" onclick="togglePlay()">▶ Play</button>
-  <button class="btn" id="stop-btn" onclick="stopAudio()">■ Reset</button>
-  <input type="range" id="seek" min="0" step="0.01" value="0">
-  <span id="time-lbl">0:00 / 0:00</span>
-  <div class="ctrl-group">
-    <span class="ctrl-lbl">Speed</span>
-    <select id="speed" onchange="changeSpeed()">
-      <option value="0.75">0.75×</option>
-      <option value="1" selected>1.00×</option>
-      <option value="1.25">1.25×</option>
-      <option value="1.5">1.50×</option>
-      <option value="2">2.00×</option>
-    </select>
-  </div>
-</div>
-<div id="status">ready · {total_words} words</div>
-<audio id="audio" preload="auto" src="data:audio/mp3;base64,{audio_b64}"></audio>
-<script>
-const boundaries={wb_json},totalWords={total_words};
-const audio=document.getElementById('audio'),seekBar=document.getElementById('seek');
-const timeLbl=document.getElementById('time-lbl'),playBtn=document.getElementById('play-btn');
-const statusLbl=document.getElementById('status'),wpFill=document.getElementById('wp-fill');
-let activeIdx=-1;
-const fmt=s=>{{const m=Math.floor(s/60),sec=Math.floor(s%60);return m+':'+(sec<10?'0':'')+sec;}};
-audio.addEventListener('loadedmetadata',()=>{{seekBar.max=audio.duration;timeLbl.textContent='0:00 / '+fmt(audio.duration);}});
-audio.addEventListener('timeupdate',()=>{{
-  const t=audio.currentTime;seekBar.value=t;
-  timeLbl.textContent=fmt(t)+' / '+fmt(audio.duration||0);
-  let lo=0,hi=boundaries.length-1,found=-1;
-  while(lo<=hi){{const mid=(lo+hi)>>1,b=boundaries[mid];
-    if(t>=b.offset&&t<b.offset+b.duration+0.06){{found=mid;break;}}
-    else if(b.offset>t){{hi=mid-1;}}else{{lo=mid+1;}}}}
-  if(found===-1){{for(let i=boundaries.length-1;i>=0;i--){{if(boundaries[i].offset<=t){{found=i;break;}}}}}}
-  if(found===activeIdx)return;activeIdx=found;
-  document.querySelectorAll('.w').forEach((el,i)=>{{
-    el.classList.remove('active','read');
-    if(i===found)el.classList.add('active');
-    else if(i<found)el.classList.add('read');
-  }});
-  if(found>=0){{
-    const el=document.querySelector(`.w[data-wi="${{found}}"]`);
-    if(el)el.scrollIntoView({{block:'nearest',behavior:'smooth'}});
-    wpFill.style.width=((found+1)/totalWords*100).toFixed(1)+'%';
-    statusLbl.textContent=`word ${{found+1}} of ${{totalWords}} · "${{boundaries[found].text}}"`;
-  }}
-}});
-audio.addEventListener('ended',()=>{{playBtn.innerHTML='▶ Play';wpFill.style.width='100%';statusLbl.textContent=`done · ${{totalWords}} words`;}});
-seekBar.addEventListener('input',()=>{{audio.currentTime=seekBar.value;}});
-function togglePlay(){{if(audio.paused){{audio.play();playBtn.innerHTML='⏸ Pause';}}else{{audio.pause();playBtn.innerHTML='▶ Play';}}}}
-function stopAudio(){{audio.pause();audio.currentTime=0;seekBar.value=0;wpFill.style.width='0%';
-  timeLbl.textContent='0:00 / '+fmt(audio.duration||0);playBtn.innerHTML='▶ Play';activeIdx=-1;
-  document.querySelectorAll('.w').forEach(el=>el.classList.remove('active','read'));
-  statusLbl.textContent=`ready · ${{totalWords}} words`;}}
-function changeSpeed(){{audio.playbackRate=parseFloat(document.getElementById('speed').value);}}
-</script></body></html>"""
-
 # ── Page config ───────────────────────────────────────────────────────────────
-st.set_page_config(page_title=cfg["app_title"], page_icon="🎙️", layout="centered")
+st.set_page_config(page_title=APP_TITLE, page_icon="🎙️", layout="centered")
 st.markdown(
     '<div style="position:fixed;top:8px;right:12px;color:#555;font-size:11px;'
     'z-index:9999;font-family:monospace;">' + APP_VERSION + '</div>',
@@ -431,7 +171,24 @@ st.markdown(
 # the worst of both worlds: it looked like a gate and was not one, and
 # the fallback was a password anyone could guess. A missing secret is now
 # a locked door, not an open one with a famous key.
-APP_PASSWORD = str(st.secrets.get("APP_PASSWORD", "") or "")
+# ─────────────────────────────────────────────────────────────────────────────
+# THE DOOR IS A USERNAME. Baba asked for it this way on 21.9.2026, having been
+# shown what it costs, and it is his app and his AssemblyAI credit.
+#
+# WHAT IT MEANS, WRITTEN DOWN SO NOBODY HAS TO WORK IT OUT LATER: there is one
+# secret, and it is the username. Anyone who knows it, is told it, or guesses
+# it can transcribe on this account until the credit is gone. There is no
+# second factor behind it.
+#
+# SO THE USERNAME SHOULD BE CHOSEN LIKE A PASSWORD — long, and not a word
+# anybody would try. The README says so at the point where it is typed in.
+#
+# compare_digest rather than ==, because a plain comparison returns as soon as
+# two characters differ, and the time it takes can be measured. That matters
+# more here than it did with a password, not less: this string is now the only
+# thing standing in the way.
+# ─────────────────────────────────────────────────────────────────────────────
+USERNAME = str(st.secrets.get("USERNAME", "") or "").strip()
 
 
 def _door():
@@ -443,22 +200,26 @@ def _door():
         st.stop()
     if st.session_state.get("_in"):
         return
-    st.markdown("### 🎙️ " + cfg["app_title"])
-    if not APP_PASSWORD:
+    st.markdown("### 🎙️ " + APP_TITLE)
+    if not USERNAME:
         # SAY WHICH SECRET IS MISSING. Somebody looking at a locked app
         # they own needs to know it is unconfigured, not broken.
-        st.error("No APP_PASSWORD is set in Secrets, so nobody can get in.")
+        st.error("No USERNAME is set in Secrets, so nobody can get in.")
         st.stop()
-    typed = st.text_input("Password", type="password", key="_pw")
+    # STILL type="password", even though it is a username. It is the only
+    # credential this app has, so it is shoulder-surfable in exactly the way a
+    # password is, and a field that shows it in the clear on a laptop in a
+    # cutting room would be the wrong kind of honest.
+    typed = st.text_input("Username", type="password", key="_pw")
     # ENTER SUBMITS, because a text_input reruns on Enter and that is how
-    # a password field is expected to behave. The button is for anyone
-    # whose keyboard hides it.
+    # this field is expected to behave. The button is for anyone whose
+    # keyboard hides it.
     if st.button("Enter", use_container_width=True) or typed:
-        if hmac.compare_digest(typed, APP_PASSWORD):
+        if hmac.compare_digest(typed.strip(), USERNAME):
             st.session_state["_in"] = True
             st.rerun()
         elif typed:
-            st.error("Wrong password.")
+            st.error("Not a username on this app.")
     st.stop()
 
 
@@ -466,8 +227,15 @@ _door()
 
 st.markdown("""
 <style>
-  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
-  html,body,[class*="css"]{font-family:'Inter',sans-serif;background:#1a1a1a;color:#e0e0e0;}
+  /* THE FONT WAS THE LAST GOOGLE IN THE APP, and it was the one nobody thinks of.
+     An @import from fonts.googleapis.com sends every visitor's IP address and referring
+     page to Google before a single word is rendered — the same thing the IP logging was
+     removed for, done by a stylesheet instead of by a function.
+     It is also render-blocking: the page waits on a third party to show its first
+     character. The stack below asks the operating system for the font it already has —
+     Inter on a machine that has it, San Francisco on a Mac, Segoe on Windows, Roboto on
+     Android — which is faster than a download can ever be, and needs no network at all. */
+  html,body,[class*="css"]{font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;background:#1a1a1a;color:#e0e0e0;}
   .stApp{background:#1a1a1a;}
   h1{color:#ff6600;font-weight:700;letter-spacing:1px;border-bottom:2px solid #ff6600;padding-bottom:8px;margin-bottom:4px;}
   .subtitle{color:#888;font-size:.85rem;margin-bottom:24px;letter-spacing:2px;text-transform:uppercase;}
@@ -554,19 +322,26 @@ EXTENDED_LANGUAGE_MAP = {
 }
 
 # ════════════════════════════════════════════════════════════════════════════
-# USAGE STATS
+# WHAT THIS SESSION HAS COST
 # ════════════════════════════════════════════════════════════════════════════
-log_entries   = sheet_load() if cfg["sheet_url"] else []
-RATE_PER_SEC  = 0.15 / 3600
-TOTAL_CREDITS = 50.00
-used_dollars  = sum(int(e.get("duration_sec", 0)) for e in log_entries) * RATE_PER_SEC
-remaining_usd = max(0.0, TOTAL_CREDITS - used_dollars)
-remaining_hrs = remaining_usd / 0.15
-remaining_min = remaining_hrs * 60
-pct           = min(1.0, used_dollars / TOTAL_CREDITS)
-bar_color     = "#44cc88" if pct < 0.7 else "#ffaa00" if pct < 0.9 else "#ff4444"
-time_left_str = (f"{remaining_hrs:.1f} h  ({remaining_min:.0f} min)"
-                 if remaining_hrs >= 1.0 else f"{remaining_min:.0f} min")
+#
+# THE RUNNING TOTAL WAS A GUESS DRESSED AS A BALANCE, and it is worth saying exactly how.
+#
+# It summed `duration_sec` over every row of the Google Sheet, multiplied by a rate typed into
+# the source, and subtracted that from a credit figure — 50.00 — also typed into the source. It
+# then printed "$x remaining" in the colour of a fuel gauge. Nothing in it had ever spoken to
+# AssemblyAI. If the real balance drifted from the guess, and it did, there was a box to type
+# the true number into so the guess could be corrected by hand.
+#
+# WITH THE SHEET GONE THERE IS NO HISTORY TO SUM, so that bar would read "full" forever. A gauge
+# that always reads full is worse than no gauge: it is read at a glance and believed.
+#
+# What replaces it is the one number this app can state as a fact — how many seconds it has sent
+# to AssemblyAI SINCE IT LOADED, and what that cost at the published rate. It is smaller than
+# what it replaces, and unlike what it replaces it is true. The real balance lives in the
+# AssemblyAI dashboard, which is linked rather than guessed at.
+RATE_PER_HOUR = 0.15
+st.session_state.setdefault("seconds_sent", 0)
 
 # ════════════════════════════════════════════════════════════════════════════
 # RECORDER HTML
@@ -736,25 +511,11 @@ def speakers_heard(utterances):
     return seen
 
 
-def upload_with_progress(audio_bytes):
-    CHUNK=32768; total=len(audio_bytes); uploaded=0; start=time.time()
-    pbar=st.progress(0.0, text="Uploading...")
-    def gen():
-        nonlocal uploaded
-        for i in range(0,total,CHUNK):
-            chunk=audio_bytes[i:i+CHUNK]; uploaded+=len(chunk)
-            elapsed=max(time.time()-start,0.001)
-            pbar.progress(uploaded/total,
-                text=f"{uploaded//1024} KB / {total//1024} KB   {(uploaded/elapsed)/1024:.0f} KB/s")
-            yield chunk
-    resp=requests.post(
-        "https://api.assemblyai.com/v2/upload",
-        headers={**HEADERS,"content-type":"application/octet-stream"},
-        data=gen())
-    pbar.progress(1.0, text="Upload done!")
-    time.sleep(0.3); pbar.empty()
-    resp.raise_for_status()
-    return resp.json()["upload_url"]
+# upload_with_progress() STOOD HERE, 18 lines, and nothing called it. It streamed the file to
+# AssemblyAI in 32 KB chunks behind a progress bar with a KB/s readout. transcribe()'s own
+# docstring already says what happened to it: "engine.run_transcription replaces all of it —
+# ffmpeg straight to Opus in ten-minute pieces, six at a time, each piece on ONE key with the
+# ring behind it". The replacement landed; the original was never taken out.
 
 def transcribe(audio_bytes, filename="audio", lang_choice="Auto detect",
                include_timecode=False, speakers=False, speaker_count=0):
@@ -849,30 +610,15 @@ def transcribe(audio_bytes, filename="audio", lang_choice="Auto detect",
         result_text = poll.get("text", "")
 
     duration_sec = int(poll.get("audio_duration", 0))
-    words_plain  = (poll.get("text", "") or "").split()
-    client_ip    = get_client_ip()
-    ip_info      = get_ip_info(client_ip)
-    owner, tag   = detect_owner(ip_info.get("org",""), ip_info.get("isp",""))
-    now_t        = datetime.now()
 
-    entry = {
-        "date":         now_t.strftime("%Y-%m-%d"),
-        "time":         now_t.strftime("%H:%M:%S"),
-        "filename":     filename,
-        "lang":         detected_label,
-        "duration_sec": duration_sec,
-        "first_words":  " ".join(words_plain[:3]),
-        "last_words":   " ".join(words_plain[-3:]),
-        "ip":           client_ip,
-        "city":         ip_info.get("city",""),
-        "country":      ip_info.get("country",""),
-        "org":          ip_info.get("org",""),
-        "isp":          ip_info.get("isp",""),
-        "owner":        owner,
-        "tag":          tag,
-    }
-    if cfg["sheet_url"]:
-        sheet_append(entry)
+    # THE ONLY THING RECORDED ABOUT A RUN, and it is about the ACCOUNT rather than the person:
+    # how many seconds were sent, so the tab can say what this session cost. It lives in session
+    # state, so it is gone when the tab is closed and it never leaves the browser's session.
+    #
+    # What used to be here instead built a fourteen-column row — filename, the first and last
+    # three words of the transcript, the visitor's IP address, their city, country, ISP and
+    # which broadcaster they appeared to work for — and appended it to a spreadsheet.
+    st.session_state["seconds_sent"] = st.session_state.get("seconds_sent", 0) + duration_sec
 
     # Generate subtitle segments from word timestamps
     st.session_state.subtitle_segments = words_to_subtitles(poll.get("words", []))
@@ -1642,58 +1388,35 @@ with tab3:
 # TAB 4 — CRE
 # ─────────────────────────────────────────────────────
 with tab4:
-    real_balance = cfg.get("real_balance", None)
-    if real_balance is not None:
-        display_usd = real_balance
-        offset      = real_balance - remaining_usd
-    else:
-        display_usd = remaining_usd
-        offset      = 0.0
-
-    display_pct   = min(1.0, (TOTAL_CREDITS - display_usd) / TOTAL_CREDITS)
-    display_hrs   = display_usd / 0.15
-    display_min   = display_hrs * 60
-    disp_color    = "#44cc88" if display_pct < 0.7 else "#ffaa00" if display_pct < 0.9 else "#ff4444"
-    disp_time     = (f"{display_hrs:.1f} h  ({display_min:.0f} min)"
-                     if display_hrs >= 1.0 else f"{display_min:.0f} min")
+    sent      = int(st.session_state.get("seconds_sent", 0))
+    spent_usd = sent / 3600.0 * RATE_PER_HOUR
+    mins      = sent // 60
+    secs      = sent % 60
 
     st.markdown(f"""
 <div style="background:#111;border:1px solid #2a2a2a;border-radius:8px;padding:16px;margin-bottom:14px;">
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
     <span style="font-family:monospace;font-size:11px;color:#555;letter-spacing:2px;">
-      ASSEMBLYAI · $0.15/h · best model
+      THIS SESSION
     </span>
-    <span style="font-family:monospace;font-size:15px;color:{disp_color};font-weight:700;">
-      ${display_usd:.2f} remaining
+    <span style="font-family:monospace;font-size:15px;color:#ff6600;font-weight:700;">
+      ${spent_usd:.3f}
     </span>
-  </div>
-  <div style="background:#1a1a1a;border-radius:4px;height:10px;overflow:hidden;margin-bottom:8px;">
-    <div style="width:{int(display_pct*100)}%;height:100%;background:{disp_color};border-radius:4px;"></div>
   </div>
   <div style="display:flex;justify-content:space-between;font-family:monospace;font-size:10px;color:#555;">
-    <span>sheet estimate: ${remaining_usd:.3f}</span>
-    <span>time left: {disp_time}</span>
+    <span>{mins}:{secs:02d} of audio sent</span>
+    <span>AssemblyAI best model · ${RATE_PER_HOUR:.2f}/h</span>
   </div>
-  {"" if real_balance is None else f'<div style="font-family:monospace;font-size:10px;color:#4a9;margin-top:4px;">✓ calibrated · offset {offset:+.3f}</div>'}
 </div>
 """, unsafe_allow_html=True)
 
-    st.markdown('<div style="font-family:monospace;font-size:11px;color:#555;margin-bottom:6px;">'
-                'Calibrate — enter real balance from AssemblyAI dashboard:</div>',
-                unsafe_allow_html=True)
-    col_bal, col_set = st.columns([3, 1])
-    with col_bal:
-        bal_input = st.number_input("", min_value=0.0, max_value=500.0,
-            value=float(real_balance) if real_balance is not None else remaining_usd,
-            step=0.01, format="%.2f", label_visibility="collapsed", key="real_balance_input")
-    with col_set:
-        if st.button("Set", use_container_width=True, key="set_balance_btn"):
-            cfg["real_balance"] = round(bal_input, 4)
-            save_settings(cfg)
-            st.success(f"Calibrated to ${bal_input:.2f}")
-            st.rerun()
-    if real_balance is not None:
-        if st.button("Clear calibration", key="clear_cal"):
-            cfg.pop("real_balance", None)
-            save_settings(cfg)
-            st.rerun()
+    st.markdown(
+        '<div style="font-family:monospace;font-size:11px;color:#555;line-height:1.6;">'
+        'This counts only what this browser tab has sent since it opened, at the published '
+        'rate. It is not your balance and does not try to be.<br><br>'
+        'The real figure is on the AssemblyAI dashboard, which is the only place that knows it:'
+        '</div>',
+        unsafe_allow_html=True)
+    st.link_button("Open the AssemblyAI dashboard",
+                   "https://www.assemblyai.com/app",
+                   use_container_width=True)
