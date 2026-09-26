@@ -22,7 +22,7 @@ import tempfile
 # accident.
 #
 # ONE NAME, AT THE TOP, WHERE SOMEBODY CHANGING A VERSION WILL SEE IT.
-APP_VERSION = "v4.0"
+APP_VERSION = "v4.1"
 
 # ── Secrets ───────────────────────────────────────────────────────────────────
 # ONE KEY WAS A HARD REQUIREMENT HERE — st.secrets["..."] with square
@@ -809,7 +809,7 @@ def join_audio_chunks(audio_list):
 # behind the gear every choice would go back to its default the moment the gear
 # closed. Writing each key back to itself at the top of the run turns it into
 # ordinary session state, which is kept — the fix Streamlit's own docs give.
-_KEEP = ["lang_radio", "ext_lang_sel", "tc_radio", "sp_radio", "sp_count",
+_KEEP = ["lang_radio", "ext_lang_sel", "tc_radio", "sp_radio", "sp_count", "sp_count_more",
          "trl_to_sel", "ext_trl_to_sel", "trl_input_area",
          "tts_lang_sel", "tts_gender", "tts_text_area", "fps_sel"]
 for _k in _KEEP:
@@ -835,6 +835,8 @@ def _settings_now():
     ss["_include_timecode"] = ss.get("tc_radio", "Off") == "On"
     ss["_speakers"] = ss.get("sp_radio", "Detect") == "Detect"
     n = ss.get("sp_count", "I don't know")
+    if n == "More…":
+        n = ss.get("sp_count_more", 7)
     ss["_speaker_count"] = int(n) if ss["_speakers"] and str(n).isdigit() else 0
 
 
@@ -997,7 +999,8 @@ def _clear_everything():
 def _settings_line():
     ss = st.session_state
     bits = [ss.get("_lang_choice", "Hrvatski"),
-            "speakers " + ("detect" if ss.get("_speakers") else "off")]
+            "speakers " + ("detect" if ss.get("_speakers") else "off")
+            + (" (%d)" % ss["_speaker_count"] if ss.get("_speaker_count") else "")]
     if ss.get("_include_timecode"):
         bits.append("timecode on")
     return " · ".join(bits)
@@ -1284,14 +1287,20 @@ def pane_settings():
                       key="sp_radio")
     st.session_state["_speakers"] = sp_opt == "Detect"
     if sp_opt == "Detect":
+        # PAST SIX, ANY NUMBER. Baba, 26.9.2026: "for how many voices after six,
+        # please add more and then the user enters any number." A panel or a
+        # round table has more than six voices, and a count is only useful if
+        # it is the right one.
         how_many = st.radio(
-            "How many voices", ["I don't know", "2", "3", "4", "5", "6"],
+            "How many voices", ["I don't know", "2", "3", "4", "5", "6", "More…"],
             horizontal=True, key="sp_count")
+        if how_many == "More…":
+            st.session_state.setdefault("sp_count_more", 7)
+            st.number_input("Number of voices", min_value=2, max_value=50,
+                            step=1, key="sp_count_more")
         # A NUMBER IS A HARD BOUNDARY, NOT A HINT: their model merges extra
         # people into the labels it is allowed, so a wrong count is worse
         # than none. "I don't know" is the honest default.
-        st.session_state["_speaker_count"] = (
-            int(how_many) if how_many.isdigit() else 0)
         st.caption("Slower: the whole recording goes as one job so the "
                    "labels hold throughout. Each voice needs about half a "
                    "minute of speech to be recognised.")
