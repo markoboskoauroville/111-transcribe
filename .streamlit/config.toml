@@ -1,9 +1,13 @@
+# Maha Transcribe's tokens (MAHA_TRANSCRIBE_STREAMLIT/ttt/theme.py), v4.0.
+# Streamlit's own theme has to agree with the injected CSS, or its built-in
+# widgets fight the design.
 [theme]
 base = "dark"
-primaryColor = "#ff6600"
-backgroundColor = "#1a1a1a"
-secondaryBackgroundColor = "#222222"
-textColor = "#e0e0e0"
+primaryColor = "#f59e0b"
+backgroundColor = "#0b0d10"
+secondaryBackgroundColor = "#141a21"
+textColor = "#f2ddb4"
+font = "monospace"
 
 [browser]
 gatherUsageStats = false

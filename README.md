@@ -12,6 +12,17 @@ written inside the app would run after the limit had already refused the file.
 **Nothing leaves this app except the audio, and it goes only to AssemblyAI.** There is no
 spreadsheet, no analytics, no IP lookup and no Google. The transcript is yours on the page.
 
+## The page (v4.0, 26.9.2026)
+
+    ⚙  111 TRANSCRIBE  v4.0      the gear, top left: Settings · Translation · TTS · CRE
+       UPLOAD                    one big target in the middle; any file, ffmpeg decides
+       The picker does not open? Use a link      Dropbox / Drive / WeTransfer / any URL
+       ▸ Record and Transcribe   folded; press stop and the transcript starts by itself
+
+The look is Maha Transcribe's (tokens from `MAHA_TRANSCRIBE_STREAMLIT/ttt/theme.py`): near-black
+ground, one bordered card, one amber accent, warm prose, pills, monospace. Why the upload has no
+file-type filter and why the recorder changed are in `LESSONS.md`.
+
 ---
 
 ## The secrets file

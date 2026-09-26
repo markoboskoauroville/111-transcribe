@@ -22,7 +22,7 @@ import tempfile
 # accident.
 #
 # ONE NAME, AT THE TOP, WHERE SOMEBODY CHANGING A VERSION WILL SEE IT.
-APP_VERSION = "v3.16"
+APP_VERSION = "v4.0"
 
 # ── Secrets ───────────────────────────────────────────────────────────────────
 # ONE KEY WAS A HARD REQUIREMENT HERE — st.secrets["..."] with square
@@ -150,10 +150,137 @@ def generate_tts(text: str, voice: str):
 
 # ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(page_title=APP_TITLE, page_icon="🎙️", layout="centered")
-st.markdown(
-    '<div style="position:fixed;top:8px;right:12px;color:#555;font-size:11px;'
-    'z-index:9999;font-family:monospace;">' + APP_VERSION + '</div>',
-    unsafe_allow_html=True)
+# THE VERSION BADGE MOVED INTO THE HEADER ROW, v4.0, beside the gear and the title.
+
+# ── The look: Maha Transcribe's, v4.0 ─────────────────────────────────────────
+#
+# Baba, 26.9.2026: "look at my other apps, Maha Transcribe, and try to copy the
+# style as much as possible ... make a makeover of the app."
+#
+# THE TOKENS ARE HIS, READ OUT OF MAHA_TRANSCRIBE_STREAMLIT/ttt/theme.py rather
+# than eyeballed: near-black ground, one bordered card, one amber accent, warm
+# prose instead of white, pills for choices, amber full-width main actions,
+# small uppercase letter-spaced labels, monospace throughout. The dim and the
+# red are the lifted ones from that file, which clear 7:1 where his originals
+# did not.
+#
+# STILL NO WEB FONT. The monospace stack asks the operating system for what it
+# already has, for the same reason the Google font was removed on 21.9.
+THEME_CSS = """
+<style>
+  :root{--bg:#0b0d10;--surface:#0d1117;--surface-2:#141a21;--line:#23303d;
+        --amber:#f59e0b;--amber-hi:#fbbf24;--prose:#f2ddb4;--dim:#b1a389;
+        --red:#f48383;--green:#22c55e;
+        --mono:ui-monospace,"JetBrains Mono","Cascadia Mono","SF Mono",Menlo,Consolas,monospace;}
+  html,body,.stApp,[data-testid="stAppViewContainer"]{background:var(--bg) !important;
+        color:var(--prose);font-family:var(--mono);}
+  .stApp p,.stApp label,.stApp span,.stApp div,.stApp button,.stApp input,.stApp textarea{font-family:var(--mono);}
+  /* the material icons are a font too, and must keep theirs */
+  .stApp [data-testid="stIconMaterial"]{font-family:"Material Symbols Rounded" !important;}
+
+  /* ONE CARD HOLDS THE APP, as in his: surface, 1px line, 10px radius. */
+  .block-container{background:var(--surface);border:1px solid var(--line);border-radius:10px;
+        padding:10px 14px 72px !important;max-width:640px;margin-top:10px;}
+  [data-testid="stMainBlockContainer"]{padding-top:10px !important;}
+
+  /* LABELS: small, uppercase, letter-spaced, quiet. */
+  .stRadio>label p,.stSelectbox>label p,.stTextInput>label p,.stAudioInput>label p,
+  [data-testid="stWidgetLabel"] p{color:var(--dim) !important;font-size:.72rem !important;
+        letter-spacing:.09em;text-transform:uppercase;font-weight:700;}
+  div[data-testid="stCaptionContainer"] p{color:var(--dim);}
+
+  /* PILLS for every button; amber fill for the main action. */
+  .stButton button,.stDownloadButton button,.stLinkButton a{background:var(--surface-2) !important;
+        border:1px solid var(--line) !important;color:var(--prose) !important;border-radius:999px !important;
+        font-weight:600;letter-spacing:.05em;box-shadow:none;}
+  .stButton button p,.stDownloadButton button p{font-weight:600;letter-spacing:.05em;}
+  .stButton button:hover,.stDownloadButton button:hover{border-color:var(--amber) !important;color:var(--amber) !important;}
+  .stButton button[kind="primary"]{background:var(--amber) !important;border-color:var(--amber) !important;
+        color:var(--bg) !important;border-radius:14px !important;font-weight:700;letter-spacing:.08em;}
+  .stButton button[kind="primary"] p{color:var(--bg) !important;font-weight:700;text-transform:uppercase;}
+  .stButton button[kind="primary"]:hover{background:var(--amber-hi) !important;}
+  /* the gear: an icon, no pill around it */
+  .stButton button[kind="tertiary"]{background:transparent !important;border:none !important;
+        color:var(--amber) !important;padding:0 !important;min-height:0;}
+  .stButton button[kind="tertiary"] [data-testid="stIconMaterial"]{font-size:1.7rem;}
+
+  /* RADIOS AS PILLS, amber when chosen. The markup is react-aria's in this
+     Streamlit (read off the live page, 26.9): the circle is the element just
+     before the label's text. */
+  .stRadio div[role="radiogroup"]{gap:4px;flex-wrap:wrap;}
+  [data-testid="stRadioOption"]{background:var(--surface-2);border:1px solid var(--line);
+        border-radius:999px;padding:4px 14px;margin:0 !important;}
+  [data-testid="stRadioOption"] div:has(+ [data-testid="stMarkdownContainer"]){display:none !important;}
+  [data-testid="stRadioOption"] p{color:var(--dim);font-size:.82rem;}
+  [data-testid="stRadioOption"]:has(input:checked),[data-testid="stRadioOption"][data-selected="true"]{
+        background:var(--amber);border-color:var(--amber);}
+  [data-testid="stRadioOption"]:has(input:checked) p,[data-testid="stRadioOption"][data-selected="true"] p{
+        color:var(--bg);font-weight:700;}
+
+  /* BOXES */
+  .stTextArea textarea,.stTextInput input,.stSelectbox div[data-baseweb="select"]>div{
+        background:var(--surface-2) !important;border:1px solid var(--line) !important;border-radius:12px !important;
+        color:var(--prose) !important;}
+  .stTextArea textarea{font-size:.9rem;line-height:1.55;}
+  .stTextArea textarea:focus,.stTextInput input:focus{border-color:var(--amber) !important;}
+
+  /* FOLDING PANELS */
+  [data-testid="stExpander"] details{background:var(--surface-2);border:1px solid var(--line) !important;border-radius:12px !important;}
+  [data-testid="stExpander"] summary p{color:var(--prose);font-weight:700;letter-spacing:.06em;font-size:.85rem;}
+  [data-testid="stExpander"] summary:hover p,[data-testid="stExpander"] summary:hover svg{color:var(--amber);fill:var(--amber);}
+
+  /* TABS (inside the gear) as his pill row */
+  .stTabs [role="tablist"]{gap:4px;flex-wrap:wrap;border:none !important;box-shadow:none !important;}
+  [data-testid="stTab"]{background:var(--surface-2);border:1px solid var(--line);border-radius:999px;
+        padding:5px 14px !important;height:auto;}
+  [data-testid="stTab"] p{color:var(--dim);font-weight:600;font-size:.85rem;}
+  [data-testid="stTab"][aria-selected="true"]{background:var(--amber) !important;border-color:var(--amber);}
+  [data-testid="stTab"][aria-selected="true"] p{color:var(--bg) !important;font-weight:700;}
+  .stTabs .react-aria-SelectionIndicator{display:none !important;}
+
+  /* THE UPLOAD: the middle of the screen, one big target. */
+  .upload-title{text-align:center;color:var(--amber);font-weight:700;letter-spacing:.3em;
+        font-size:.8rem;margin:18px 0 6px;}
+  [data-testid="stFileUploader"] section,[data-testid="stFileUploaderDropzone"]{
+        background:var(--surface-2) !important;border:1.5px dashed var(--line) !important;border-radius:16px !important;
+        min-height:26vh;display:flex !important;flex-direction:column !important;align-items:center !important;
+        justify-content:center !important;gap:10px;padding:22px 12px !important;}
+  [data-testid="stFileUploaderDropzone"]:hover{border-color:var(--amber) !important;}
+  /* Streamlit's own "2GB per file" says half of what the hint below says */
+  [data-testid="stFileUploaderDropzoneInstructions"]{display:none !important;}
+  [data-testid="stFileUploaderDropzoneInstructions"] span,[data-testid="stFileUploaderDropzoneInstructions"] small{color:var(--dim) !important;}
+  [data-testid="stFileUploaderDropzone"] button{background:var(--amber) !important;color:var(--bg) !important;
+        border:none !important;border-radius:999px !important;font-weight:700;letter-spacing:.1em;
+        padding:14px 34px !important;font-size:1rem !important;text-transform:uppercase;}
+  [data-testid="stFileUploaderFile"]{color:var(--prose);}
+
+  /* THE RECORDER, in the same colours */
+  [data-testid="stAudioInput"]>div{background:var(--surface-2) !important;border:1px solid var(--line) !important;border-radius:12px !important;}
+
+  /* THE HEADER STAYS ONE ROW ON A PHONE. Streamlit stacks columns below 640px,
+     which put the gear, the name and the version on three lines. */
+  .st-key-hdr [data-testid="stHorizontalBlock"]{flex-wrap:nowrap !important;gap:6px;}
+  .st-key-hdr [data-testid="stColumn"]{min-width:0 !important;width:auto !important;flex:0 0 auto !important;}
+  .st-key-hdr [data-testid="stColumn"]:nth-child(2){flex:1 1 auto !important;}
+  .st-key-row_actions [data-testid="stHorizontalBlock"],.st-key-row_subs [data-testid="stHorizontalBlock"]{
+        flex-wrap:nowrap !important;gap:6px;}
+  .st-key-row_actions [data-testid="stColumn"],.st-key-row_subs [data-testid="stColumn"]{
+        min-width:0 !important;width:auto !important;flex:1 1 0 !important;}
+  .st-key-row_actions iframe{margin-bottom:-14px;}
+  .app-title{font-weight:800;letter-spacing:.18em;color:var(--prose);font-size:1.05rem;text-align:center;
+        padding-top:2px;white-space:nowrap;}
+  .app-title b{color:var(--amber);}
+  .app-ver{color:var(--dim);font-size:.7rem;text-align:right;padding-top:6px;}
+  .status-line{background:var(--surface-2);border-left:3px solid var(--amber);padding:8px 14px;
+        border-radius:8px;margin:8px 0;font-size:.82rem;color:var(--prose);}
+  .status-line strong{color:var(--amber);}
+  .hint{color:var(--dim);font-size:.75rem;text-align:center;margin:4px 0 10px;line-height:1.5;}
+
+  header[data-testid="stHeader"],[data-testid="stToolbar"],[data-testid="stDecoration"],
+  [data-testid="stStatusWidget"],[data-testid="stMainMenuPopover"],#MainMenu,footer{display:none !important;}
+</style>
+"""
+st.markdown(THEME_CSS, unsafe_allow_html=True)
 
 # ── The door ──────────────────────────────────────────────────────────────────
 #
@@ -200,7 +327,7 @@ def _door():
         st.stop()
     if st.session_state.get("_in"):
         return
-    st.markdown("### 🎙️ " + APP_TITLE)
+    st.markdown('<div class="app-title" style="margin:30px 0 16px"><b>111</b> TRANSCRIBE</div>', unsafe_allow_html=True)
     if not USERNAME:
         # SAY WHICH SECRET IS MISSING. Somebody looking at a locked app
         # they own needs to know it is unconfigured, not broken.
@@ -214,7 +341,7 @@ def _door():
     # ENTER SUBMITS, because a text_input reruns on Enter and that is how
     # this field is expected to behave. The button is for anyone whose
     # keyboard hides it.
-    if st.button("Enter", use_container_width=True) or typed:
+    if st.button("Enter", type="primary", use_container_width=True) or typed:
         if hmac.compare_digest(typed.strip(), USERNAME):
             st.session_state["_in"] = True
             st.rerun()
@@ -225,46 +352,7 @@ def _door():
 
 _door()
 
-st.markdown("""
-<style>
-  /* THE FONT WAS THE LAST GOOGLE IN THE APP, and it was the one nobody thinks of.
-     An @import from fonts.googleapis.com sends every visitor's IP address and referring
-     page to Google before a single word is rendered — the same thing the IP logging was
-     removed for, done by a stylesheet instead of by a function.
-     It is also render-blocking: the page waits on a third party to show its first
-     character. The stack below asks the operating system for the font it already has —
-     Inter on a machine that has it, San Francisco on a Mac, Segoe on Windows, Roboto on
-     Android — which is faster than a download can ever be, and needs no network at all. */
-  html,body,[class*="css"]{font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;background:#1a1a1a;color:#e0e0e0;}
-  .stApp{background:#1a1a1a;}
-  h1{color:#ff6600;font-weight:700;letter-spacing:1px;border-bottom:2px solid #ff6600;padding-bottom:8px;margin-bottom:4px;}
-  .subtitle{color:#888;font-size:.85rem;margin-bottom:24px;letter-spacing:2px;text-transform:uppercase;}
-  .stRadio>label{color:#aaa;font-size:.8rem;letter-spacing:1px;text-transform:uppercase;}
-  .stRadio div[role="radiogroup"] label{color:#ccc;}
-  .stButton>button{background:#ff6600;color:#000;font-weight:700;border:none;border-radius:4px;
-    padding:7px 14px;letter-spacing:0.5px;font-size:.85rem;text-transform:uppercase;}
-  .stButton>button:hover{background:#cc5200;color:#fff;}
-  .stTextArea textarea{background:#2a2a2a;color:#e0e0e0;border:1px solid #444;
-    font-family:'Courier New',monospace;font-size:.9rem;}
-  .stDownloadButton>button{background:#222;color:#ff6600;border:1px solid #ff6600;
-    border-radius:4px;font-weight:600;}
-  .stDownloadButton>button:hover{background:#ff6600;color:#000;}
-  .status-box{background:#222;border-left:3px solid #ff6600;padding:10px 16px;
-    border-radius:4px;margin:12px 0;font-size:.9rem;color:#aaa;}
-  .detected-lang{background:#1a1a2e;border-left:3px solid #4466ff;padding:8px 14px;
-    border-radius:4px;margin:8px 0;font-size:.85rem;color:#aab4ff;font-family:monospace;}
-  .stExpander{border:1px solid #2a2a2a !important;border-radius:6px !important;}
 
-  /* ── Hide Streamlit chrome ── */
-  header[data-testid="stHeader"]    { display:none !important; }
-  [data-testid="stToolbar"]         { display:none !important; }
-  [data-testid="stDecoration"]      { display:none !important; }
-  [data-testid="stStatusWidget"]    { display:none !important; }
-  [data-testid="stMainMenuPopover"] { display:none !important; }
-  #MainMenu                         { display:none !important; }
-  footer                            { display:none !important; }
-</style>
-""", unsafe_allow_html=True)
 
 
 # ── Session state ─────────────────────────────────────────────────────────────
@@ -344,124 +432,6 @@ RATE_PER_HOUR = 0.15
 st.session_state.setdefault("seconds_sent", 0)
 
 # ════════════════════════════════════════════════════════════════════════════
-# RECORDER HTML
-# ════════════════════════════════════════════════════════════════════════════
-RECORDER_HTML = """
-<div style="background:#111;border:1px solid #2a2a2a;border-radius:8px;padding:16px;margin-bottom:8px;">
-  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
-    <span style="color:#ff6600;font-size:11px;letter-spacing:3px;font-family:monospace;">AUDIO MONITOR</span>
-    <span id="timer" style="color:#ff6600;font-size:24px;font-weight:700;font-family:monospace;letter-spacing:3px;">00:00</span>
-    <span id="recDot" style="color:#444;font-size:11px;font-family:monospace;">● STANDBY</span>
-  </div>
-  <canvas id="waveCanvas" height="60"
-    style="width:100%;height:60px;background:#0a0a0a;border-radius:4px;display:block;margin-bottom:10px;"></canvas>
-  <div style="display:flex;gap:10px;margin-bottom:12px;">
-    <button id="btnStart" onclick="startRec()"
-      style="flex:1;background:#ff6600;color:#000;border:none;border-radius:4px;
-             padding:12px;font-weight:700;font-size:13px;cursor:pointer;">⏺ REC</button>
-    <button id="btnStop" onclick="stopRec()" disabled
-      style="flex:1;background:#333;color:#666;border:1px solid #444;border-radius:4px;
-             padding:12px;font-weight:700;font-size:13px;cursor:not-allowed;">■ STOP</button>
-  </div>
-  <div style="margin-bottom:10px;">
-    <div style="font-family:monospace;font-size:10px;color:#444;margin-bottom:4px;letter-spacing:2px;">INPUT LEVEL</div>
-    <div style="background:#0a0a0a;border-radius:3px;height:8px;overflow:hidden;">
-      <div id="levelFill" style="height:100%;width:0%;background:#ff6600;border-radius:3px;transition:width 0.1s;"></div>
-    </div>
-  </div>
-  <div id="statusMsg" style="font-family:monospace;font-size:11px;color:#555;margin-bottom:12px;">initializing microphone...</div>
-  <div id="downloadWrap" style="display:none;">
-    <audio id="audioPlayer" controls style="width:100%;margin-bottom:10px;filter:invert(0.8) hue-rotate(180deg);"></audio>
-    <a id="downloadBtn" style="display:block;background:#ff6600;color:#000;text-align:center;
-       padding:12px;border-radius:4px;font-weight:700;font-size:13px;text-decoration:none;cursor:pointer;">
-      ⬇ SPREMI NA DISK</a>
-    <div style="margin-top:8px;padding:8px 12px;background:#1a2a1a;border-left:3px solid #44cc88;
-                border-radius:4px;font-size:11px;color:#44cc88;font-family:monospace;">
-      ✓ Spremi datoteku — zatim je uploadaj ispod</div>
-  </div>
-</div>
-<script>
-const canvas=document.getElementById('waveCanvas'),ctx=canvas.getContext('2d');
-const timerEl=document.getElementById('timer'),recDot=document.getElementById('recDot');
-const levelFl=document.getElementById('levelFill'),statusEl=document.getElementById('statusMsg');
-let analyser,dataArray,mediaRecorder,chunks=[],timerInt=null,seconds=0,isRec=false,stream=null,recCount=0;
-function pad(n){return String(n).padStart(2,'0');}
-function drawLoop(){
-  requestAnimationFrame(drawLoop);
-  const W=canvas.offsetWidth*(window.devicePixelRatio||1),H=60*(window.devicePixelRatio||1);
-  if(canvas.width!==W)canvas.width=W;canvas.height=H;
-  ctx.fillStyle='#0a0a0a';ctx.fillRect(0,0,W,H);
-  if(!analyser)return;
-  analyser.getByteTimeDomainData(dataArray);
-  ctx.lineWidth=isRec?2:1;ctx.strokeStyle=isRec?'#ff6600':'#444';
-  ctx.shadowBlur=isRec?12:0;ctx.shadowColor='#ff6600';ctx.beginPath();
-  const sw=W/dataArray.length;
-  for(let i=0;i<dataArray.length;i++){const y=((dataArray[i]/128)-1)*(H/2)+H/2;i===0?ctx.moveTo(0,y):ctx.lineTo(i*sw,y);}
-  ctx.stroke();ctx.shadowBlur=0;
-  let sum=0;for(let i=0;i<dataArray.length;i++)sum+=Math.abs(dataArray[i]-128);
-  const lvl=Math.min(100,(sum/dataArray.length)*4);
-  levelFl.style.width=lvl+'%';
-  levelFl.style.background=lvl>70?'#ff4444':lvl>40?'#ffaa00':'#ff6600';
-}
-async function initMic(){
-  try{
-    stream=await navigator.mediaDevices.getUserMedia({audio:true,video:false});
-    const actx=new(window.AudioContext||window.webkitAudioContext)();
-    const source=actx.createMediaStreamSource(stream);
-    analyser=actx.createAnalyser();analyser.fftSize=2048;
-    dataArray=new Uint8Array(analyser.frequencyBinCount);source.connect(analyser);
-    statusEl.textContent='Mikrofon spreman — pritisni REC';statusEl.style.color='#ff6600';
-  }catch(e){statusEl.textContent='Mikrofon nedostupan: '+e.message;statusEl.style.color='#ff4444';}
-}
-function startRec(){
-  if(!stream){statusEl.textContent='Nema mikrofona!';return;}
-  chunks=[];document.getElementById('downloadWrap').style.display='none';
-  const formats=['audio/mp4;codecs=aac','audio/mp4','audio/aac','audio/ogg;codecs=opus','audio/webm;codecs=opus','audio/webm'];
-  const mimeType=formats.find(f=>MediaRecorder.isTypeSupported(f))||'';
-  mediaRecorder=new MediaRecorder(stream,mimeType?{mimeType}:{});
-  mediaRecorder.ondataavailable=e=>{if(e.data.size>0)chunks.push(e.data);};
-  mediaRecorder.onstop=buildDownload;mediaRecorder.start(100);
-  isRec=true;seconds=0;timerEl.textContent='00:00';timerEl.style.color='#ff4444';
-  recDot.textContent='● REC';recDot.style.color='#ff4444';
-  statusEl.textContent='Snimanje u tijeku...';statusEl.style.color='#ff4444';
-  document.getElementById('btnStart').disabled=true;
-  document.getElementById('btnStart').style.background='#552200';
-  document.getElementById('btnStart').style.color='#888';
-  document.getElementById('btnStop').disabled=false;
-  document.getElementById('btnStop').style.background='#ff4444';
-  document.getElementById('btnStop').style.color='#fff';
-  document.getElementById('btnStop').style.cursor='pointer';
-  timerInt=setInterval(()=>{seconds++;timerEl.textContent=pad(Math.floor(seconds/60))+':'+pad(seconds%60);},1000);
-}
-function stopRec(){
-  if(mediaRecorder&&mediaRecorder.state!=='inactive')mediaRecorder.stop();
-  clearInterval(timerInt);isRec=false;
-  recDot.textContent='■ DONE';recDot.style.color='#44cc88';timerEl.style.color='#44cc88';
-  statusEl.textContent='Snimanje završeno';statusEl.style.color='#44cc88';
-  document.getElementById('btnStart').disabled=false;
-  document.getElementById('btnStart').style.background='#ff6600';
-  document.getElementById('btnStart').style.color='#000';
-  document.getElementById('btnStop').disabled=true;
-  document.getElementById('btnStop').style.background='#333';
-  document.getElementById('btnStop').style.color='#666';
-  document.getElementById('btnStop').style.cursor='not-allowed';
-}
-function buildDownload(){
-  recCount++;
-  const blob=new Blob(chunks,{type:mediaRecorder.mimeType||'audio/webm'});
-  const url=URL.createObjectURL(blob);
-  const mt=mediaRecorder.mimeType||'';
-  const ext=mt.includes('mp4')||mt.includes('aac')?'m4a':mt.includes('ogg')?'ogg':'webm';
-  const name='snimka_'+pad(recCount)+'.'+ext;
-  document.getElementById('audioPlayer').src=url;
-  const dlBtn=document.getElementById('downloadBtn');
-  dlBtn.href=url;dlBtn.download=name;dlBtn.textContent='⬇ SPREMI NA DISK ('+name+')';
-  document.getElementById('downloadWrap').style.display='block';
-}
-drawLoop();window.addEventListener('load',initMic);
-</script>"""
-
-# ════════════════════════════════════════════════════════════════════════════
 # HELPERS
 # ════════════════════════════════════════════════════════════════════════════
 def ms_to_tc(ms):
@@ -530,10 +500,12 @@ def transcribe(audio_bytes, filename="audio", lang_choice="Auto detect",
     ten-minute pieces, six at a time, each piece on ONE key with the ring
     behind it, and the text box filling as the pieces land.
     """
-    if lang_choice == "Hrvatski":
-        lang_params = {"language_code": "hr"}
-    elif lang_choice == "English":
-        lang_params = {"language_code": "en"}
+    # ANY LANGUAGE FROM THE LONG LIST, not just the two with buttons. Until
+    # v4.0 a choice under "All languages" was shown as set and then sent as
+    # Auto detect, because only Hrvatski and English were ever mapped here.
+    _code = LANGUAGE_MAP.get(lang_choice) or EXTENDED_LANGUAGE_MAP.get(lang_choice)
+    if lang_choice != "Auto detect" and _code:
+        lang_params = {"language_code": _code}
     else:
         lang_params = {"language_detection": True}
 
@@ -819,75 +791,244 @@ def join_audio_chunks(audio_list):
                 except: pass
     return None
 
+
 # ════════════════════════════════════════════════════════════════════════════
-# 3-TAB LAYOUT
+# THE LAYOUT, v4.0: ONE PAGE, AND A GEAR FOR EVERYTHING ELSE
 # ════════════════════════════════════════════════════════════════════════════
-tab1, tab2, tab3, tab4 = st.tabs(["Transcript", "Translation", "TTS", "CRE"])
+#
+# Baba, 26.9.2026: "create settings icon, gear icon, in the upper left corner
+# and move tabs, all other tabs except transcribe ... [into the] gear icon."
+#
+# The four tabs were four equal doors, and three of them lead somewhere he goes
+# once a week. The page is now the one thing he does every day — get a file or
+# a voice into text — and the gear holds Settings, Translation, TTS and the
+# credit (CRE).
+#
+# WIDGETS THAT ARE NOT DRAWN FORGET THEIR VALUE. Streamlit deletes a widget's
+# state on any run in which the widget does not appear, so with the settings
+# behind the gear every choice would go back to its default the moment the gear
+# closed. Writing each key back to itself at the top of the run turns it into
+# ordinary session state, which is kept — the fix Streamlit's own docs give.
+_KEEP = ["lang_radio", "ext_lang_sel", "tc_radio", "sp_radio", "sp_count",
+         "trl_to_sel", "ext_trl_to_sel", "trl_input_area",
+         "tts_lang_sel", "tts_gender", "tts_text_area", "fps_sel"]
+for _k in _KEEP:
+    if _k in st.session_state:
+        st.session_state[_k] = st.session_state[_k]
+st.session_state.setdefault("gear_open", False)
 
 
-# ─────────────────────────────────────────────────────
-# TAB 1 — TRANSCRIPT
-# ─────────────────────────────────────────────────────
-with tab1:
+def _settings_now():
+    """The transcription settings, worked out from what is stored, every run.
+
+    THESE USED TO BE SET ONLY WHILE THE SETTINGS PANEL WAS DRAWN. With the
+    panel behind the gear that would mean a recording made before the gear was
+    ever opened went out as "Auto detect" with no speakers, instead of the
+    defaults — Hrvatski, speakers detected — that he chose on 17.9.
+    """
+    ss = st.session_state
+    lang = ss.get("lang_radio", "Hrvatski")
+    ext = ss.get("ext_lang_sel", "")
+    if ext and ext in EXTENDED_LANGUAGE_MAP:
+        lang = ext
+    ss["_lang_choice"] = lang
+    ss["_include_timecode"] = ss.get("tc_radio", "Off") == "On"
+    ss["_speakers"] = ss.get("sp_radio", "Detect") == "Detect"
+    n = ss.get("sp_count", "I don't know")
+    ss["_speaker_count"] = int(n) if ss["_speakers"] and str(n).isdigit() else 0
+
+
+_settings_now()
+
+
+# ── The header: the gear on the left, the name in the middle ──────────────────
+_hdr = st.container(key="hdr")
+_g, _t, _v = _hdr.columns([1, 6, 1], vertical_alignment="center")
+with _g:
+    if st.button("", icon=":material/close:" if st.session_state.gear_open
+                 else ":material/settings:", type="tertiary", key="gear_btn",
+                 help="Settings, Translation, TTS, credit"):
+        st.session_state.gear_open = not st.session_state.gear_open
+        st.rerun()
+with _t:
+    st.markdown('<div class="app-title"><b>111</b> TRANSCRIBE</div>',
+                unsafe_allow_html=True)
+with _v:
+    st.markdown('<div class="app-ver">%s</div>' % APP_VERSION,
+                unsafe_allow_html=True)
+
+
+# ─── SHARED ACTION: run or re-run transcription ───────────────────────────────
+def run_transcription():
+    _settings_now()
+    _lc    = st.session_state.get("_lang_choice", "Hrvatski")
+    _tc    = st.session_state.get("_include_timecode", False)
+    _bytes = st.session_state["_cached_file_bytes"]
+    _name  = st.session_state["_cached_file_name"]
+    try:
+        _sp = st.session_state.get("_speakers", False)
+        _spn = st.session_state.get("_speaker_count", 0)
+        result_text, dur, det_code, det_label = transcribe(
+            _bytes, _name, _lc, _tc, speakers=_sp, speaker_count=_spn)
+        st.session_state.transcript_text   = result_text
+        st.session_state.tts_input         = result_text
+        st.session_state.detected_lang     = det_code
+        st.session_state.trl_result        = ""
+        st.session_state.trl_segments      = []
+        base = os.path.splitext(_name)[0]
+        tc_s = "_timecode" if _tc else ""
+        st.session_state.download_filename = f"{base}_{det_code}{tc_s}.txt"
+        # Track settings used for this transcription
+        st.session_state["_last_lang_choice"] = _lc
+        st.session_state["_last_timecode"]     = _tc
+        # Bump version → text area gets a fresh widget key → reads new value
+        st.session_state["_tx_version"] = st.session_state.get("_tx_version", 0) + 1
+        st.rerun()
+    except requests.exceptions.HTTPError as e:
+        st.error(f"HTTP error: {e.response.status_code} — {e.response.text}")
+    except Exception as e:
+        st.error(f"Error: {str(e)}")
+
+
+# ── The fallback for a phone whose picker will not open ───────────────────────
+#
+# Baba, 26.9.2026: "on some Android phone it doesn't work. Click that picker,
+# it offers only to open the file in certain apps, not actually activating the
+# file browser. So you need to find the fallback mechanism."
+#
+# THE CAUSE WAS OUR OWN LIST OF FIFTY EXTENSIONS. A file input with an `accept`
+# list hands Android a set of MIME types, and some makers' builds of Chrome
+# answer a mixed audio-and-video set with an app chooser — recorder, camera,
+# gallery — instead of the file browser. Stock Android (the Pixel 7 emulator,
+# 26.9) shows the browser either way, which is why it never showed up here.
+#
+# SO THE PICKER NO LONGER FILTERS AT ALL: no `accept`, and every phone opens
+# its plain file browser. ffmpeg was always the real judge of what can be read,
+# and it still says so in words when it cannot.
+#
+# AND IF A PHONE STILL WILL NOT GIVE UP A FILE, a link does: Dropbox, a public
+# Drive link, WeTransfer's direct link, or any URL that serves the file. The
+# server fetches it, so nothing has to go through the phone's picker at all.
+MAX_FETCH_BYTES = 2000 * 1024 * 1024        # the same 2000 MB as the upload cap
+
+
+def _direct_link(url):
+    """A share link turned into the link that serves the file itself."""
+    url = url.strip()
+    m = re.search(r"drive\.google\.com/(?:file/d/|open\?id=|uc\?id=)([\w-]+)", url)
+    if m:
+        return "https://drive.google.com/uc?export=download&confirm=t&id=" + m.group(1)
+    if "dropbox.com" in url:
+        url = re.sub(r"([?&])dl=0", r"\1dl=1", url)
+        if "dl=1" not in url and "raw=1" not in url:
+            url += ("&" if "?" in url else "?") + "dl=1"
+    return url
+
+
+def fetch_link(url):
+    """Download a file from a link into the same cache the uploader fills."""
+    url = _direct_link(url)
+    if not re.match(r"^https?://", url):
+        raise ValueError("That is not a web link (it has to start with https://).")
+    with requests.get(url, stream=True, timeout=30, allow_redirects=True) as r:
+        r.raise_for_status()
+        ctype = r.headers.get("content-type", "")
+        if ctype.startswith("text/html"):
+            raise ValueError("That link opens a web page, not a file. Use the "
+                             "service's download or direct link.")
+        name = ""
+        cd = r.headers.get("content-disposition", "")
+        m = re.search(r"filename\*?=(?:UTF-8'')?\"?([^\";]+)", cd)
+        if m:
+            name = requests.utils.unquote(m.group(1))
+        if not name:
+            name = os.path.basename(requests.utils.urlparse(r.url).path) or "linked_file"
+        buf = bytearray()
+        for chunk in r.iter_content(1024 * 1024):
+            buf.extend(chunk)
+            if len(buf) > MAX_FETCH_BYTES:
+                raise ValueError("That file is over 2000 MB.")
+    if not buf:
+        raise ValueError("The link gave back an empty file.")
+    return bytes(buf), name
+
+
+def recording_to_opus(wav_bytes):
+    """The recording as Opus, the same 16 kHz mono 16k the engine sends.
+
+    A minute of 16 kHz WAV is about 1.9 MB; the same minute as Opus is about
+    120 KB, and the words come through the same (measured 17.9, see the
+    engine). This is only the copy he saves; the engine makes its own.
+    """
+    with tempfile.TemporaryDirectory() as d:
+        src, dst = os.path.join(d, "in.wav"), os.path.join(d, "out.ogg")
+        with open(src, "wb") as fh:
+            fh.write(wav_bytes)
+        r = subprocess.run(["ffmpeg", "-y", "-i", src, "-ac", "1", "-ar", "16000",
+                            "-c:a", "libopus", "-b:a", "16k", dst],
+                           capture_output=True)
+        if r.returncode != 0 or not os.path.exists(dst):
+            return None
+        with open(dst, "rb") as fh:
+            return fh.read()
+
+
+def _clear_everything():
+    # NEW MEANS NEW. Baba, 17.9.2026: "when I click New Transcription, the
+    # speakers are surviving. New transcription should delete everything."
+    # The speaker keys are cleared BY PREFIX so anything named that way goes
+    # with them, rather than by a hand-written list that is wrong again the
+    # next time something is added.
+    for k in ["transcript_text","detected_lang","trl_result","tts_input",
+              "subtitle_segments","trl_segments","audio_duration_ms",
+              "_cached_file_name","_cached_file_bytes"]:
+        st.session_state[k] = (
+            [] if k in ["subtitle_segments","trl_segments"]
+            else b"" if k == "_cached_file_bytes"
+            else "")
+    for k in ["_utterances", "_speaker_names", "file_uploader_widget", "rec_widget"]:
+        st.session_state.pop(k, None)
+    for k in [x for x in list(st.session_state) if str(x).startswith("_spname_")]:
+        st.session_state.pop(k, None)
+    st.session_state.download_filename = "transkript.txt"
+    st.session_state["_uploader_gen"] = st.session_state.get("_uploader_gen", 0) + 1
+
+
+def _settings_line():
+    ss = st.session_state
+    bits = [ss.get("_lang_choice", "Hrvatski"),
+            "speakers " + ("detect" if ss.get("_speakers") else "off")]
+    if ss.get("_include_timecode"):
+        bits.append("timecode on")
+    return " · ".join(bits)
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# THE PAGE: TRANSCRIBE
+# ═════════════════════════════════════════════════════════════════════════════
+def page_transcribe():
     has_transcript = bool(st.session_state.transcript_text)
     has_cache      = bool(st.session_state.get("_cached_file_name"))
 
-    # ─── SHARED ACTION: run or re-run transcription ───────────────────────────
-    def run_transcription():
-        _lc    = st.session_state.get("_lang_choice", "Auto detect")
-        _tc    = st.session_state.get("_include_timecode", False)
-        _bytes = st.session_state["_cached_file_bytes"]
-        _name  = st.session_state["_cached_file_name"]
-        try:
-            _sp = st.session_state.get("_speakers", False)
-            _spn = st.session_state.get("_speaker_count", 0)
-            result_text, dur, det_code, det_label = transcribe(
-                _bytes, _name, _lc, _tc, speakers=_sp, speaker_count=_spn)
-            st.session_state.transcript_text   = result_text
-            st.session_state.tts_input         = result_text
-            st.session_state.detected_lang     = det_code
-            st.session_state.trl_result        = ""
-            st.session_state.trl_segments      = []
-            base = os.path.splitext(_name)[0]
-            tc_s = "_timecode" if _tc else ""
-            st.session_state.download_filename = f"{base}_{det_code}{tc_s}.txt"
-            # Track settings used for this transcription
-            st.session_state["_last_lang_choice"] = _lc
-            st.session_state["_last_timecode"]     = _tc
-            # Bump version → text area gets a fresh widget key → reads new value
-            st.session_state["_tx_version"] = st.session_state.get("_tx_version", 0) + 1
-            st.rerun()
-        except requests.exceptions.HTTPError as e:
-            st.error(f"HTTP error: {e.response.status_code} — {e.response.text}")
-        except Exception as e:
-            st.error(f"Error: {str(e)}")
-
-    # ─── WHO IS SPEAKING ──────────────────────────────────────────────────────
-    #
-    # One row per voice: how much it said, and a box to name it. Naming is
-    # what makes a diarised transcript usable — "Speaker B" is no better than
-    # a letter when he is cutting an interview at midnight.
     # ─── POST-TRANSCRIPT VIEW ─────────────────────────────────────────────────
     if has_transcript:
         det_code  = st.session_state.detected_lang
         det_label = CODE_TO_LABEL.get(det_code, det_code.upper()) if det_code else ""
         segs      = st.session_state.subtitle_segments
-        fps       = st.session_state.fps
-        total_ms  = st.session_state.get("audio_duration_ms", 0)
 
-        # ROW 1: Download | Copy | New
-        c1, c2, c3 = st.columns(3)
+        # ROW 1: Download | Copy | New — one row on a phone too (see .st-key-row)
+        c1, c2, c3 = st.container(key="row_actions").columns(3)
         with c1:
             st.download_button("Download", data=st.session_state.transcript_text.encode(),
                 file_name=st.session_state.download_filename, mime="text/plain",
                 use_container_width=True, key="dl_top")
         with c2:
             _ch = f"""<style>body{{margin:0;background:transparent;}}
-.cp{{background:#ff6600;color:#000;font-weight:700;border:none;border-radius:4px;
-     padding:7px 0;font-size:.85rem;letter-spacing:.5px;text-transform:uppercase;
-     cursor:pointer;width:100%;display:block;}}.cp:active{{background:#cc5200;}}
-#msg{{color:#44cc88;font-family:monospace;font-size:11px;padding:2px 0;display:none;text-align:center;}}
-</style><button class="cp" onclick="doCopy()">COPY</button><div id="msg">✓ Copied</div>
+.cp{{background:#141a21;color:#f2ddb4;font-weight:600;border:1px solid #23303d;border-radius:999px;
+     padding:8px 0;font-size:.85rem;letter-spacing:.05em;font-family:ui-monospace,Menlo,monospace;
+     cursor:pointer;width:100%;display:block;}}.cp:active{{border-color:#f59e0b;color:#f59e0b;}}
+#msg{{color:#22c55e;font-family:ui-monospace,Menlo,monospace;font-size:11px;padding:2px 0;display:none;text-align:center;}}
+</style><button class="cp" onclick="doCopy()">Copy</button><div id="msg">✓ Copied</div>
 <script>function doCopy(){{var t={json.dumps(st.session_state.transcript_text)};var ok=false;
 try{{var a=document.createElement('textarea');a.value=t;a.setAttribute('readonly','');
 a.style.cssText='position:absolute;left:-9999px;top:0;opacity:0;';document.body.appendChild(a);
@@ -900,41 +1041,12 @@ setTimeout(function(){{m.style.display='none';}},2000);}}</script>"""
             st.components.v1.html(_ch, height=52)
         with c3:
             if st.button("New", use_container_width=True, key="new_session"):
-                # NEW MEANS NEW. Baba, 17.9.2026: "when I click New
-                # Transcription, the speakers are surviving. New
-                # transcription should delete everything."
-                #
-                # THE LIST WAS HAND-WRITTEN, so it held whatever existed on
-                # the day somebody wrote it and knew nothing of the speaker
-                # work added afterwards. The old voices stayed, their names
-                # stayed, and the name boxes kept their typed values —
-                # which is worse than untidy: the next recording would be
-                # offered "Marinko" for a voice that is not his.
-                #
-                # A hand-written list of things to clear will be wrong
-                # again the next time something is added. The speaker keys
-                # are cleared BY PREFIX so anything named that way goes
-                # with them.
-                for k in ["transcript_text","detected_lang","trl_result","tts_input",
-                          "subtitle_segments","trl_segments","audio_duration_ms",
-                          "_cached_file_name","_cached_file_bytes"]:
-                    st.session_state[k] = (
-                        [] if k in ["subtitle_segments","trl_segments"]
-                        else b"" if k == "_cached_file_bytes"
-                        else "")
-                for k in ["_utterances", "_speaker_names"]:
-                    st.session_state.pop(k, None)
-                # The per-voice name boxes are widgets, so their typed text
-                # lives under their own keys and outlives the dictionary.
-                for k in [x for x in list(st.session_state)
-                          if str(x).startswith("_spname_")]:
-                    st.session_state.pop(k, None)
-                st.session_state.download_filename = "transkript.txt"
+                _clear_everything()
                 st.rerun()
 
-        # ROW 2: SRT | Avid
+        # ROW 2: FPS | SRT | Avid
         if segs:
-            c4, c5, c6 = st.columns(3)
+            c4, c5, c6 = st.container(key="row_subs").columns(3)
             with c4:
                 fps_val = st.selectbox("FPS", [23, 24, 25, 30], index=2,
                                        key="fps_sel", label_visibility="collapsed")
@@ -950,213 +1062,244 @@ setTimeout(function(){{m.style.display='none';}},2000);}}</script>"""
                     file_name=f"{st.session_state.download_filename.replace('.txt','')}.txt",
                     mime="text/plain", use_container_width=True, key="dl_avid")
 
-        # WHAT THIS RECORDING TURNED OUT TO BE — and it does not claim to
-        # have DETECTED a language he chose himself.
-        #
-        # Baba, 17.9.2026: "detected Croatian language. It is not detected.
-        # The user pressed Croatian and then detection is not needed. And
-        # in the same status line put how many speakers are detected."
-        #
-        # He is right that the word was a lie. The app asks the language
-        # before it starts, and if he answered "Hrvatski" then nothing was
-        # detected — it was obeyed. The word is kept ONLY for Auto detect,
-        # where it is true and worth knowing.
+        # "Detected" ONLY for Auto detect, where it is true (Baba, 17.9.2026: "The
+        # user pressed Croatian and then detection is not needed."), and the
+        # speaker count on the same line.
         _bits = []
         if det_code:
-            _chose = st.session_state.get("_lang_choice", "Auto detect")
+            _chose = st.session_state.get("_last_lang_choice", "Auto detect")
             _word = "Detected" if _chose == "Auto detect" else "Language"
-            _bits.append("%s: <strong>%s</strong> &nbsp;·&nbsp; <code>%s</code>"
+            _bits.append("%s: <strong>%s</strong> · <code>%s</code>"
                          % (_word, det_label, det_code))
         _n_spk = len(speakers_heard(st.session_state.get("_utterances") or []))
         if _n_spk:
             _bits.append("Speakers: <strong>%d</strong>" % _n_spk)
         if _bits:
-            st.markdown('<div class="detected-lang">%s</div>'
-                        % " &nbsp;&nbsp;|&nbsp;&nbsp; ".join(_bits),
-                        unsafe_allow_html=True)
+            st.markdown('<div class="status-line">%s</div>'
+                        % " &nbsp;|&nbsp; ".join(_bits), unsafe_allow_html=True)
 
-    _utts = st.session_state.get("_utterances") or []
-    if _utts:
-        heard = speakers_heard(_utts)
-        # FOLDED AWAY, NOT ABSENT. Baba: "speaker should come under a
-        # speaker kind of title which user can uncollapse and add speakers.
-        # Otherwise those speakers take a lot of real estate."
-        #
-        # Thirteen voices is thirteen rows of three columns between him and
-        # his transcript, and most of the time he wants to read the words
-        # rather than name anybody. The title carries the COUNT so the
-        # panel says what is inside it without being opened.
-        with st.expander("Speakers (%d) — name them and the transcript follows"
-                         % len(heard), expanded=False):
-            names = st.session_state.setdefault("_speaker_names", {})
-            for who in heard:
-                mine = [u for u in _utts if u.get("speaker") == who]
-                said = sum(len((u.get("text") or "").split()) for u in mine)
-                first = ms_to_tc(mine[0].get("start", 0)) if mine else "00:00:00.00"
-                cols = st.columns([1, 2, 3])
-                with cols[0]:
-                    st.markdown("**%s**" % who)
-                with cols[1]:
-                    st.caption("%d words · first at %s" % (said, first))
-                with cols[2]:
-                    names[who] = st.text_input(
-                        "name for %s" % who, value=names.get(who, ""),
-                        key="_spname_%s" % who, label_visibility="collapsed",
-                        placeholder="Speaker %s" % who)
-            rebuilt = speaker_text(_utts, names,
-                                   st.session_state.get("_include_timecode", False))
-            if rebuilt and rebuilt != st.session_state.get("transcript_text", ""):
-                if st.button("apply the names to the transcript"):
-                    st.session_state.transcript_text = rebuilt
-                    st.session_state.tts_input = rebuilt
-                    st.session_state["_tx_version"] = st.session_state.get("_tx_version", 0) + 1
-                    st.rerun()
+        _utts = st.session_state.get("_utterances") or []
+        if _utts:
+            heard = speakers_heard(_utts)
+            # FOLDED AWAY, NOT ABSENT (Baba, 17.9.2026: "Otherwise those speakers
+            # take a lot of real estate"). The title carries the count.
+            with st.expander("Speakers (%d) — name them and the transcript follows"
+                             % len(heard), expanded=False):
+                names = st.session_state.setdefault("_speaker_names", {})
+                for who in heard:
+                    mine = [u for u in _utts if u.get("speaker") == who]
+                    said = sum(len((u.get("text") or "").split()) for u in mine)
+                    first = ms_to_tc(mine[0].get("start", 0)) if mine else "00:00:00.00"
+                    cols = st.columns([1, 2, 3])
+                    with cols[0]:
+                        st.markdown("**%s**" % who)
+                    with cols[1]:
+                        st.caption("%d words · first at %s" % (said, first))
+                    with cols[2]:
+                        names[who] = st.text_input(
+                            "name for %s" % who, value=names.get(who, ""),
+                            key="_spname_%s" % who, label_visibility="collapsed",
+                            placeholder="Speaker %s" % who)
+                rebuilt = speaker_text(_utts, names,
+                                       st.session_state.get("_include_timecode", False))
+                if rebuilt and rebuilt != st.session_state.get("transcript_text", ""):
+                    if st.button("apply the names to the transcript"):
+                        st.session_state.transcript_text = rebuilt
+                        st.session_state.tts_input = rebuilt
+                        st.session_state["_tx_version"] = st.session_state.get("_tx_version", 0) + 1
+                        st.rerun()
 
-
-        st.text_area("", st.session_state.transcript_text, height=360,
+        st.text_area("transcript", st.session_state.transcript_text, height=360,
                      label_visibility="collapsed",
                      key=f"result_area_{st.session_state.get('_tx_version', 0)}")
 
-    # ─── UPLOAD VIEW (no transcript yet) ─────────────────────────────────────
-    else:
-        # on_change callback fires the instant a file is selected — captures bytes
-        # immediately and reliably on Android, no dependence on rerun timing.
-        def _cache_uploaded_file():
-            f = st.session_state.get("file_uploader_widget")
-            if f is not None:
-                st.session_state["_cached_file_bytes"] = f.getvalue()
-                st.session_state["_cached_file_name"]  = f.name
-                st.session_state["_cached_file_size"]  = f.size
+        # THE RECORDING ITSELF, SAVED SMALL. The old recorder's one job was a
+        # "save to disk" button; it stays, as Opus rather than WAV.
+        if st.session_state.get("_cached_from") == "rec" and has_cache:
+            if st.session_state.get("_rec_opus") is None:
+                st.session_state["_rec_opus"] = recording_to_opus(
+                    st.session_state["_cached_file_bytes"]) or b""
+            if st.session_state["_rec_opus"]:
+                st.download_button(
+                    "Save the recording (%d KB)" % (len(st.session_state["_rec_opus"]) // 1024),
+                    data=st.session_state["_rec_opus"],
+                    file_name=st.session_state["_cached_file_name"].replace(".wav", ".ogg"),
+                    mime="audio/ogg", use_container_width=True, key="dl_rec")
 
-        st.file_uploader(
-            "",
-            # ANY FILE FFMPEG CAN READ. Baba: "this file picker can accept
-            # any file which FFmpeg can convert to audio. So it can be also
-            # video file."
-            #
-            # A HAND-WRITTEN LIST IS A LIST THAT MISSES SOMETHING, and the
-            # miss is silent: Streamlit simply refuses the file with no
-            # explanation, and the person concludes their recording is
-            # broken. ffmpeg reads hundreds of containers; these are the
-            # ones a broadcast editor actually hands it, and the widened
-            # tail is what an Android recorder and a camera produce.
-            #
-            # If something still gets refused, ffmpeg is the thing that
-            # decides — not this list — so the error names ffmpeg.
-            type=["mp3","mp4","m4a","wav","aac","ogg","flac","webm",
-                  "mov","mxf","wma","opus","3gp","amr","mp2","mpga","mpeg",
-                  "mkv","avi","wmv","flv","m4v","mts","m2ts","ts","vob",
-                  "mpg","mp4v","caf","aiff","aif","aifc","oga","opus",
-                  "wv","ape","dts","ac3","m4b","mka","f4v","asf","dv",
-                  "r3d","braw","avchd","m2v","rm","au","snd","voc"],
-            label_visibility="collapsed",
-            key="file_uploader_widget",
-            on_change=_cache_uploaded_file)
+        # RE-TRANSCRIBE, when the settings in the gear changed since the run.
+        if has_cache:
+            changed = (st.session_state.get("_lang_choice") != st.session_state.get("_last_lang_choice")
+                       or st.session_state.get("_include_timecode") != st.session_state.get("_last_timecode"))
+            if st.button("Re-Transcribe" + (" ↺" if changed else ""),
+                         use_container_width=True, key="do_retranscribe"):
+                run_transcription()
+        return
 
-        # Reflect cache state set by the callback
-        has_cache = bool(st.session_state.get("_cached_file_name"))
-
-    # ─── SETTINGS, FOLDED AWAY ───────────────────────────────────────────────
+    # ─── UPLOAD: not folded, the middle of the screen ─────────────────────────
     #
-    # Baba, 17.9.2026: "settings should be collapsible because defaults are
-    # good. All languages advanced should be in the section of languages."
-    #
-    # Five rows of radios stood between him and the one button he presses,
-    # and on a phone that is most of a screen to scroll past every time.
-    # The defaults are Croatian, no timecode, speakers detected — which is
-    # what he wants nearly always.
-    #
-    # THE TITLE CARRIES THE CURRENT CHOICES, so the panel says what is
-    # inside it without being opened. A folded panel that hides what it is
-    # set to would turn every transcription into a guess about whether the
-    # language is still right.
-    _cur_lang = st.session_state.get("lang_radio", "Hrvatski")
-    _cur_spk = st.session_state.get("sp_radio", "Detect")
-    _cur_tc = st.session_state.get("tc_radio", "Off")
-    _summary = "Settings — %s · speakers %s%s" % (
-        _cur_lang, _cur_spk.lower(),
-        " · timecode on" if _cur_tc == "On" else "")
-    with st.expander(_summary, expanded=False):
-        lang_choice = st.radio("Language", ["Hrvatski", "English", "Auto detect"],
-                               horizontal=True, key="lang_radio")
-        st.session_state["_lang_choice"] = lang_choice
+    # Baba, 26.9.2026: "this part for uploading file Upload ... this one is not
+    # collapsible ... put it in the middle of the screen. So it's a middle
+    # button."
+    st.markdown('<div class="upload-title">UPLOAD</div>', unsafe_allow_html=True)
+    st.file_uploader(
+        "Upload",
+        # NO `type` LIST — see "The fallback" above. Any file; ffmpeg decides.
+        label_visibility="collapsed",
+        key="file_uploader_widget_%d" % st.session_state.get("_uploader_gen", 0),
+        on_change=lambda: _cache_from("file_uploader_widget_%d"
+                                      % st.session_state.get("_uploader_gen", 0)))
+    st.markdown('<div class="hint">audio or video, any format, up to 2000 MB<br>'
+                '%s</div>' % _settings_line(), unsafe_allow_html=True)
 
-        # THE LONG LIST BELONGS WITH THE LANGUAGE, and it was sitting under
-        # the Transcribe button. That was not only untidy: it ran AFTER the
-        # transcription on the same pass, so a language chosen here only
-        # took effect on the NEXT press. Whoever used it once and got
-        # Croatian anyway would have blamed the app and been right.
-        with st.expander("All languages (advanced)", expanded=False):
-            ext_lang = st.selectbox(
-                "Select any language for transcription",
-                ["— use primary selector above —"]
-                + sorted(EXTENDED_LANGUAGE_MAP.keys()),
-                key="ext_lang_sel")
-            if ext_lang != "— use primary selector above —":
-                st.session_state["_lang_choice"] = ext_lang
-                st.info("Set to: %s (%s)"
-                        % (ext_lang, EXTENDED_LANGUAGE_MAP.get(ext_lang, "")))
-
-        tc_opt = st.radio("Timecode", ["Off", "On"], horizontal=True, key="tc_radio")
-        st.session_state["_include_timecode"] = tc_opt == "On"
-
-        # WHO IS SPEAKING (17.9.2026). Off by default, because it costs speed:
-        # the whole recording has to go as one job for the labels to mean the
-        # same thing from beginning to end, which gives up the six-way parallel
-        # that makes this app quick.
-        # DETECT FIRST, SO IT IS THE DEFAULT. Baba, 17.9.2026: "speaker
-        # detection is default. First comes Detect and then second is Off."
-        #
-        # A radio takes its first option unless told otherwise, so the order IS
-        # the default — there is no separate setting to keep in step with it.
-        # Most of what goes through this app is an interview or a piece with
-        # several voices, and the one case that does not need it, a voiceover
-        # read by one person, costs nothing: one speaker is found and the
-        # labels are dropped on the way out.
-        sp_opt = st.radio("Speakers", ["Detect", "Off"], horizontal=True,
-                          key="sp_radio")
-        st.session_state["_speakers"] = sp_opt == "Detect"
-        if sp_opt == "Detect":
-            how_many = st.radio(
-                "How many voices", ["I don't know", "2", "3", "4", "5", "6"],
-                horizontal=True, key="sp_count")
-            # A NUMBER IS A HARD BOUNDARY, NOT A HINT: their model merges extra
-            # people into the labels it is allowed, so a wrong count is worse
-            # than none. "I don't know" is the honest default.
-            st.session_state["_speaker_count"] = (
-                int(how_many) if how_many.isdigit() else 0)
-            st.caption("Slower: the whole recording goes as one job so the "
-                       "labels hold throughout. Each voice needs about half a "
-                       "minute of speech to be recognised.")
-
-    if not has_transcript:
-        input_mode = st.radio("Source", ["Upload", "Rec"], horizontal=True)
-        if input_mode == "Rec":
-            st.components.v1.html(RECORDER_HTML, height=360)
-
-    # ─── PRIMARY ACTION BUTTON ────────────────────────────────────────────────
-    # Detects if settings differ from last transcription to label appropriately
-    if has_cache:
-        curr_lang = st.session_state.get("_lang_choice", "")
-        curr_tc   = st.session_state.get("_include_timecode", False)
-        last_lang = st.session_state.get("_last_lang_choice", "")
-        last_tc   = st.session_state.get("_last_timecode", False)
-        settings_changed = has_transcript and (curr_lang != last_lang or curr_tc != last_tc)
-
-        if has_transcript:
-            btn_label = "Re-Transcribe" + (" ↺" if settings_changed else "")
-        else:
-            btn_label = "Transcribe"
-
-        if st.button(btn_label, use_container_width=True, key="do_transcribe"):
+    has_cache = bool(st.session_state.get("_cached_file_name"))
+    if has_cache and st.session_state.get("_cached_from") != "rec":
+        if st.button("Transcribe", type="primary", use_container_width=True,
+                     key="do_transcribe"):
             run_transcription()
 
+    with st.expander("The picker does not open? Use a link", expanded=False):
+        st.caption("Some Android phones offer apps instead of files. Put the "
+                   "file in Dropbox, Drive or WeTransfer, copy its share link "
+                   "and paste it here — the server fetches it.")
+        link = st.text_input("Link to the file", key="link_in",
+                             placeholder="https://…")
+        if st.button("Fetch", use_container_width=True, key="link_fetch"):
+            if not link.strip():
+                st.warning("Paste a link first.")
+            else:
+                with st.spinner("Fetching…"):
+                    try:
+                        data, name = fetch_link(link)
+                        st.session_state["_cached_file_bytes"] = data
+                        st.session_state["_cached_file_name"] = name
+                        st.session_state["_cached_file_size"] = len(data)
+                        st.session_state["_cached_from"] = "link"
+                        st.success("%s — %.1f MB. Press Transcribe."
+                                   % (name, len(data) / 1048576))
+                        st.rerun()
+                    except Exception as exc:                  # noqa: BLE001
+                        st.error("Could not fetch it: %s" % exc)
+        if st.session_state.get("_cached_from") == "link" and has_cache:
+            st.caption("Ready: %s" % st.session_state["_cached_file_name"])
+
+    # ─── RECORD AND TRANSCRIBE: folded, and it transcribes on its own ─────────
+    #
+    # Baba, 26.9.2026: "recorder should be also in the transcribe ... after user
+    # press stop should be automatically transcribed ... it's collapsible ...
+    # call it Record and Transcribe."
+    #
+    # AND ON ANDROID IT SAID, IN RED, "Mikrofon nedostupan: Permission denied".
+    # Reproduced on the Pixel 7 emulator, 26.9. The old recorder asked for the
+    # microphone THE MOMENT THE PAGE LOADED, not when anybody pressed REC. On
+    # Android Chrome a prompt nobody asked for is easy to dismiss, a "Block" is
+    # remembered for the site, and after a few dismissals Chrome stops asking
+    # and refuses by itself — and the recorder had no second attempt. Safari on
+    # iOS asks again every time, which is why the iPhone never saw it.
+    #
+    # st.audio_input asks only when the record button is pressed, is not a
+    # hand-made iframe, and hands the audio straight to Python — so the stop
+    # button can start the transcription, which the old recorder never could
+    # (it could only offer a file to save and upload again).
+    #
+    # OPTIMISED AT BOTH ENDS: the browser records at 16 kHz mono, which is all
+    # AssemblyAI listens to, and the engine sends it on as 16k Opus.
+    with st.expander("Record and Transcribe", expanded=False):
+        rec = st.audio_input("Record", sample_rate=16000,
+                             label_visibility="collapsed",
+                             key="rec_widget_%d" % st.session_state.get("_uploader_gen", 0))
+        # TWO DOORS ON ANDROID, and either one gives "Permission denied": the
+        # site's (Chrome asks when the button is pressed) and Chrome's own
+        # (Android asks once whether Chrome may record audio at all). Seen on
+        # the Pixel 7 emulator, 26.9 — so the hint names both.
+        st.caption("Press the microphone, speak, press stop — the transcript "
+                   "starts by itself. If the microphone is blocked: tap the "
+                   "icon left of the address → Permissions → Microphone → "
+                   "Allow, and reload. On Android also check Settings → Apps "
+                   "→ Chrome → Permissions → Microphone.")
+        if rec is not None:
+            rid = getattr(rec, "file_id", None) or "%d" % rec.size
+            if st.session_state.get("_rec_done") != rid:
+                st.session_state["_rec_done"] = rid
+                raw = rec.getvalue()
+                st.session_state["_cached_file_bytes"] = raw
+                st.session_state["_cached_file_name"] = time.strftime("recording_%Y%m%d_%H%M%S.wav")
+                st.session_state["_cached_file_size"] = len(raw)
+                st.session_state["_cached_from"] = "rec"
+                st.session_state["_rec_opus"] = None
+                run_transcription()
 
 
-# ─────────────────────────────────────────────────────
-# TAB 2 — TRANSLATION
-# ─────────────────────────────────────────────────────
-with tab2:
+def _cache_from(key):
+    f = st.session_state.get(key)
+    if f is not None:
+        st.session_state["_cached_file_bytes"] = f.getvalue()
+        st.session_state["_cached_file_name"]  = f.name
+        st.session_state["_cached_file_size"]  = f.size
+        st.session_state["_cached_from"] = "upload"
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# THE GEAR: SETTINGS, TRANSLATION, TTS, CRE
+# ═════════════════════════════════════════════════════════════════════════════
+def pane_settings():
+    # THE SETTINGS, MOVED INTO THE GEAR 26.9.2026. The page shows what they are
+    # set to under the Upload target, so nobody has to open the gear to check.
+    lang_choice = st.radio("Language", ["Hrvatski", "English", "Auto detect"],
+                           horizontal=True, key="lang_radio")
+    st.session_state["_lang_choice"] = lang_choice
+
+    # THE LONG LIST BELONGS WITH THE LANGUAGE, and it was sitting under
+    # the Transcribe button. That was not only untidy: it ran AFTER the
+    # transcription on the same pass, so a language chosen here only
+    # took effect on the NEXT press. Whoever used it once and got
+    # Croatian anyway would have blamed the app and been right.
+    with st.expander("All languages (advanced)", expanded=False):
+        ext_lang = st.selectbox(
+            "Select any language for transcription",
+            ["— use primary selector above —"]
+            + sorted(EXTENDED_LANGUAGE_MAP.keys()),
+            key="ext_lang_sel")
+        if ext_lang != "— use primary selector above —":
+            st.session_state["_lang_choice"] = ext_lang
+            st.info("Set to: %s (%s)"
+                    % (ext_lang, EXTENDED_LANGUAGE_MAP.get(ext_lang, "")))
+
+    tc_opt = st.radio("Timecode", ["Off", "On"], horizontal=True, key="tc_radio")
+    st.session_state["_include_timecode"] = tc_opt == "On"
+
+    # WHO IS SPEAKING (17.9.2026). Off by default, because it costs speed:
+    # the whole recording has to go as one job for the labels to mean the
+    # same thing from beginning to end, which gives up the six-way parallel
+    # that makes this app quick.
+    # DETECT FIRST, SO IT IS THE DEFAULT. Baba, 17.9.2026: "speaker
+    # detection is default. First comes Detect and then second is Off."
+    #
+    # A radio takes its first option unless told otherwise, so the order IS
+    # the default — there is no separate setting to keep in step with it.
+    # Most of what goes through this app is an interview or a piece with
+    # several voices, and the one case that does not need it, a voiceover
+    # read by one person, costs nothing: one speaker is found and the
+    # labels are dropped on the way out.
+    sp_opt = st.radio("Speakers", ["Detect", "Off"], horizontal=True,
+                      key="sp_radio")
+    st.session_state["_speakers"] = sp_opt == "Detect"
+    if sp_opt == "Detect":
+        how_many = st.radio(
+            "How many voices", ["I don't know", "2", "3", "4", "5", "6"],
+            horizontal=True, key="sp_count")
+        # A NUMBER IS A HARD BOUNDARY, NOT A HINT: their model merges extra
+        # people into the labels it is allowed, so a wrong count is worse
+        # than none. "I don't know" is the honest default.
+        st.session_state["_speaker_count"] = (
+            int(how_many) if how_many.isdigit() else 0)
+        st.caption("Slower: the whole recording goes as one job so the "
+                   "labels hold throughout. Each voice needs about half a "
+                   "minute of speech to be recognised.")
+    _settings_now()
+
+
+def pane_translation():
+    # The old Translation tab, unchanged in what it does.
     det_code_trl  = st.session_state.get("detected_lang", "")
     source_is_hr  = det_code_trl == "hr"
     def_to_idx    = 1 if source_is_hr else 0
@@ -1182,8 +1325,8 @@ with tab2:
     with cb:
         do_translate = st.button("Translate", use_container_width=True, key="trl_btn")
 
-    trl_input = st.text_area("", value=st.session_state.get("trl_input_area", ""),
-                             height=180, key="trl_input_area",
+    st.session_state.setdefault("trl_input_area", "")
+    trl_input = st.text_area("Text", height=180, key="trl_input_area",
                              label_visibility="collapsed",
                              placeholder="Pull from transcript or paste text here...")
 
@@ -1218,7 +1361,7 @@ with tab2:
         fname_base  = f"translation_{from_code_trl}_{to_code_val}"
         fps_t       = st.session_state.fps
 
-        st.text_area("", st.session_state.trl_result, height=180,
+        st.text_area("Translation", st.session_state.trl_result, height=180,
                      key="trl_result_area", label_visibility="collapsed")
 
         # Download row: text + SRT + Avid
@@ -1239,10 +1382,8 @@ with tab2:
                     file_name=f"{fname_base}_avid.txt", mime="text/plain", key="trl_dl_avid")
 
 
-# ─────────────────────────────────────────────────────
-# TAB 3 — TTS
-# ─────────────────────────────────────────────────────
-with tab3:
+def pane_tts():
+    # The old TTS tab, unchanged in what it does.
     det_code_tts = st.session_state.get("detected_lang", "")
     tts_detected = CODE_TO_LABEL.get(det_code_tts, "English") if det_code_tts else "English"
     tts_lang_idx = list(VOICE_MAP.keys()).index(tts_detected) if tts_detected in VOICE_MAP else 1
@@ -1281,7 +1422,9 @@ with tab3:
             key="tts_txt_widget",
             on_change=_cache_txt_file)
 
-    tts_lang = st.radio("Language", list(VOICE_MAP.keys()), index=tts_lang_idx,
+    if "tts_lang_sel" not in st.session_state:
+        st.session_state["tts_lang_sel"] = list(VOICE_MAP.keys())[tts_lang_idx]
+    tts_lang = st.radio("Language", list(VOICE_MAP.keys()),
                         horizontal=True, key="tts_lang_sel")
     gender = st.radio("Voice", ["Female", "Male"], horizontal=True, key="tts_gender")
     gender_key     = "🚺 Female" if gender == "Female" else "🚹 Male"
@@ -1290,8 +1433,8 @@ with tab3:
                 f'margin-bottom:6px;">voice: {selected_voice}</div>',
                 unsafe_allow_html=True)
 
-    tts_text = st.text_area("", value=st.session_state.get("tts_text_area",""),
-                            height=150, key="tts_text_area",
+    st.session_state.setdefault("tts_text_area", "")
+    tts_text = st.text_area("Text", height=150, key="tts_text_area",
                             label_visibility="collapsed",
                             placeholder="Pull or paste text to read aloud...")
 
@@ -1384,10 +1527,8 @@ with tab3:
                 st.error(f"Error: {exc}")
 
 
-# ─────────────────────────────────────────────────────
-# TAB 4 — CRE
-# ─────────────────────────────────────────────────────
-with tab4:
+def pane_credit():
+    # The old CRE tab: what this browser tab has sent, and the real dashboard.
     sent      = int(st.session_state.get("seconds_sent", 0))
     spent_usd = sent / 3600.0 * RATE_PER_HOUR
     mins      = sent // 60
@@ -1420,3 +1561,17 @@ with tab4:
     st.link_button("Open the AssemblyAI dashboard",
                    "https://www.assemblyai.com/app",
                    use_container_width=True)
+
+
+if st.session_state.gear_open:
+    _p1, _p2, _p3, _p4 = st.tabs(["Settings", "Translation", "TTS", "CRE"])
+    with _p1:
+        pane_settings()
+    with _p2:
+        pane_translation()
+    with _p3:
+        pane_tts()
+    with _p4:
+        pane_credit()
+else:
+    page_transcribe()
