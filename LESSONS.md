@@ -34,3 +34,15 @@ transcript. A real phone's thumb and microphone are still the last test.
 v4 and v5 were pushed as "v4.0" and "v4.1". MANTRA_MANIFEST `modules/versioning.md` says one whole
 number, a new one for every change, and never a dot. They keep the names they were pushed with,
 because a pushed name is not rewritten; the count carries on from them, and this build is v6.
+
+## 26.9.2026, v7: a file had to be picked twice
+
+Measured on the Pixel 7 emulator with seven `accept` values side by side. Only `accept="audio/*"`
+opens Android's file browser directly. No filter, `*/*`, audio plus video, an extension list, the
+old fifty-extension list, and even `application/octet-stream,audio/*` all open a chooser (Camera,
+Camcorder, Media picker). The chooser offers the camera, so Chrome first asks for camera permission,
+and that question swallows the tap: the picker never opens, and the second tap works. With "Only
+this time" it comes back every visit. The chooser also has no Files entry, so a recording in
+Downloads could not be reached at all. The big UPLOAD is now `audio/*` and opens the browser on the
+first tap even with camera permission revoked; VIDEO is a second, smaller uploader with `video/*`.
+The rule for every Streamlit app is in MANTRA_MANIFEST `modules/streamlit-file-picker-android.md`.

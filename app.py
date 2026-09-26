@@ -25,7 +25,7 @@ import tempfile
 # WHOLE NUMBERS ONLY (MANTRA_MANIFEST modules/versioning.md): v4, v5, v6 - never
 # v4.1. The builds pushed on 26.9.2026 as "v4.0" and "v4.1" are v4 and v5; they
 # stay in the history under the names they were pushed with.
-APP_VERSION = "v6"
+APP_VERSION = "v7"
 
 # ── Secrets ───────────────────────────────────────────────────────────────────
 # ONE KEY WAS A HARD REQUIREMENT HERE — st.secrets["..."] with square
@@ -252,10 +252,22 @@ THEME_CSS = """
   /* Streamlit's own "2GB per file" says half of what the hint below says */
   [data-testid="stFileUploaderDropzoneInstructions"]{display:none !important;}
   [data-testid="stFileUploaderDropzoneInstructions"] span,[data-testid="stFileUploaderDropzoneInstructions"] small{color:var(--dim) !important;}
-  [data-testid="stFileUploaderDropzone"] button{background:var(--amber) !important;color:var(--bg) !important;
+  [data-testid="stFileUploaderDropzone"] button[data-testid="stBaseButton-secondary"]{background:var(--amber) !important;color:var(--bg) !important;
         border:none !important;border-radius:999px !important;font-weight:700;letter-spacing:.1em;
         padding:14px 34px !important;font-size:1rem !important;text-transform:uppercase;}
   [data-testid="stFileUploaderFile"]{color:var(--prose);}
+  /* the chosen file's x and the + beside it stay small and quiet: only the main button is amber */
+  [data-testid="stFileChipDeleteBtn"] button,[data-testid="stFileChips"] button{background:transparent !important;
+        color:var(--dim) !important;border:1px solid var(--line) !important;border-radius:999px !important;padding:4px 10px !important;}
+  /* Streamlit names its button "Upload" whatever the picker is for; this one says what it takes */
+  .st-key-video_pick [data-testid="stBaseButton-secondary"] [data-testid="stMarkdownContainer"]{display:none;}
+  .st-key-video_pick [data-testid="stBaseButton-secondary"]::after{content:"VIDEO";letter-spacing:.1em;font-weight:700;}
+
+  /* THE VIDEO PICKER: the same, small, under the audio target */
+  .st-key-video_pick [data-testid="stFileUploaderDropzone"]{min-height:0 !important;padding:8px 12px !important;
+        flex-direction:row !important;border-style:solid !important;}
+  .st-key-video_pick [data-testid="stFileUploaderDropzone"] button[data-testid="stBaseButton-secondary"]{padding:6px 18px !important;font-size:.8rem !important;
+        background:var(--surface-2) !important;color:var(--amber) !important;border:1px solid var(--amber) !important;}
 
   /* THE RECORDER, in the same colours */
   [data-testid="stAudioInput"]>div{background:var(--surface-2) !important;border:1px solid var(--line) !important;border-radius:12px !important;}
@@ -901,6 +913,8 @@ def run_transcription():
 # it offers only to open the file in certain apps, not actually activating the
 # file browser. So you need to find the fallback mechanism."
 #
+# (26.9.2026, later: measured, see "WHY A FILE HAD TO BE PICKED TWICE" — it is the mixed audio and
+# video types, and no filter at all behaves the same. The big button is now audio/* only.)
 # THE CAUSE WAS OUR OWN LIST OF FIFTY EXTENSIONS. A file input with an `accept`
 # list hands Android a set of MIME types, and some makers' builds of Chrome
 # answer a mixed audio-and-video set with an app chooser — recorder, camera,
@@ -1147,15 +1161,46 @@ setTimeout(function(){{m.style.display='none';}},2000);}}</script>"""
     # collapsible ... put it in the middle of the screen. So it's a middle
     # button."
     st.markdown('<div class="upload-title">UPLOAD</div>', unsafe_allow_html=True)
+    # ── WHY A FILE HAD TO BE PICKED TWICE, AND WHY THERE ARE TWO PICKERS ─────────────────
+    #
+    # Baba, 26.9.2026: "when I file pick, I need to always do it 2 times. First time I pick file,
+    # nothing happened. Second time it's happening. So what is this? Why 2 times?"
+    #
+    # MEASURED ON THE PIXEL 7 EMULATOR, seven `accept` values side by side. Chrome on Android reads
+    # the file input's `accept` and decides what to offer:
+    #
+    #     accept="audio/*"                  -> the Files browser, straight away. Nothing else.
+    #     no accept, "*/*", "audio/*,video/*", an extension list, the old fifty-extension list,
+    #     even "application/octet-stream,audio/*"
+    #                                       -> a chooser: Camera, Camcorder, Media picker.
+    #
+    # The chooser offers the CAMERA, so Chrome must first ask for camera permission, and that
+    # question EATS THE TAP: answer it and the picker never opens. Tap again and it does. With
+    # "Only this time" the question comes back every visit, so every visit needed two picks. And
+    # the chooser has no Files entry at all, so a voice recording in Downloads could not be reached
+    # from it: the "offers only certain apps" fault of the same morning.
+    #
+    # SO THE BIG BUTTON TAKES AUDIO ONLY, which is the one value that opens the file browser on the
+    # first tap on every Android tried, and video has its own smaller picker, where the gallery is
+    # the right place to look anyway. ffmpeg still reads whatever comes in. MANTRA_MANIFEST
+    # modules/streamlit-file-picker-android.md has the rule for every Streamlit app.
     st.file_uploader(
         "Upload",
-        # NO `type` LIST — see "The fallback" above. Any file; ffmpeg decides.
+        type=["audio/*"],
         label_visibility="collapsed",
         key="file_uploader_widget_%d" % st.session_state.get("_uploader_gen", 0),
         on_change=lambda: _cache_from("file_uploader_widget_%d"
                                       % st.session_state.get("_uploader_gen", 0)))
-    st.markdown('<div class="hint">audio or video, any format, up to 2000 MB<br>'
+    st.markdown('<div class="hint">audio, any format, up to 2000 MB<br>'
                 '%s</div>' % _settings_line(), unsafe_allow_html=True)
+    with st.container(key="video_pick"):
+        st.file_uploader(
+            "Video",
+            type=["video/*"],
+            label_visibility="collapsed",
+            key="video_uploader_widget_%d" % st.session_state.get("_uploader_gen", 0),
+            on_change=lambda: _cache_from("video_uploader_widget_%d"
+                                          % st.session_state.get("_uploader_gen", 0)))
 
     has_cache = bool(st.session_state.get("_cached_file_name"))
     if has_cache and st.session_state.get("_cached_from") != "rec":
