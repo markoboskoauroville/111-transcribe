@@ -12,9 +12,9 @@ written inside the app would run after the limit had already refused the file.
 **Nothing leaves this app except the audio, and it goes only to AssemblyAI.** There is no
 spreadsheet, no analytics, no IP lookup and no Google. The transcript is yours on the page.
 
-## The page (v4.0, 26.9.2026)
+## The page (v4, 26.9.2026)
 
-    ⚙  111 TRANSCRIBE  v4.0      the gear, top left: Settings · Translation · TTS · CRE
+    ⚙  111 TRANSCRIBE  v6      the gear, top left: Settings · Translation · TTS · CRE
        UPLOAD                    one big target in the middle; any file, ffmpeg decides
        The picker does not open? Use a link      Dropbox / Drive / WeTransfer / any URL
        ▸ Record and Transcribe   folded; press stop and the transcript starts by itself

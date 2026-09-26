@@ -1,6 +1,6 @@
 # LESSONS — 111 TRANSCRIBE
 
-## 26.9.2026, v4.0: two Android faults, both found on the Pixel 7 emulator
+## 26.9.2026, v4: two Android faults, both found on the Pixel 7 emulator
 
 **The recorder said, in red, "Mikrofon nedostupan: Permission denied."** The old recorder was a
 hand-made iframe that called `getUserMedia` the moment the page loaded, not when REC was pressed.
@@ -28,3 +28,9 @@ recording made before the gear was ever opened still goes out in Hrvatski with s
 **The emulator's microphone is silent** (peak 0.0 with `avd hostmicon` on), so the recording path
 was proven in desktop Chrome with a spoken WAV as the fake microphone: stop, and 5.8 s later the
 transcript. A real phone's thumb and microphone are still the last test.
+
+## 26.9.2026, v6: the number is a whole number
+
+v4 and v5 were pushed as "v4.0" and "v4.1". MANTRA_MANIFEST `modules/versioning.md` says one whole
+number, a new one for every change, and never a dot. They keep the names they were pushed with,
+because a pushed name is not rewritten; the count carries on from them, and this build is v6.

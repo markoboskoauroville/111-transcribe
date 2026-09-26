@@ -22,7 +22,10 @@ import tempfile
 # accident.
 #
 # ONE NAME, AT THE TOP, WHERE SOMEBODY CHANGING A VERSION WILL SEE IT.
-APP_VERSION = "v4.1"
+# WHOLE NUMBERS ONLY (MANTRA_MANIFEST modules/versioning.md): v4, v5, v6 - never
+# v4.1. The builds pushed on 26.9.2026 as "v4.0" and "v4.1" are v4 and v5; they
+# stay in the history under the names they were pushed with.
+APP_VERSION = "v6"
 
 # ── Secrets ───────────────────────────────────────────────────────────────────
 # ONE KEY WAS A HARD REQUIREMENT HERE — st.secrets["..."] with square
@@ -150,7 +153,7 @@ def generate_tts(text: str, voice: str):
 
 # ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(page_title=APP_TITLE, page_icon="🎙️", layout="centered")
-# THE VERSION BADGE MOVED INTO THE HEADER ROW, v4.0, beside the gear and the title.
+# THE VERSION BADGE MOVED INTO THE HEADER ROW, v4, beside the gear and the title.
 
 # ── The look: Maha Transcribe's, v4.0 ─────────────────────────────────────────
 #
