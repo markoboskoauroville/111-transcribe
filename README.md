@@ -14,10 +14,12 @@ spreadsheet, no analytics, no IP lookup and no Google. The transcript is yours o
 
 ## The page (v4, 26.9.2026)
 
-    ⚙  111 TRANSCRIBE  v6      the gear, top left: Settings · Translation · TTS · CRE
-       UPLOAD                    one big target in the middle; any file, ffmpeg decides
-       The picker does not open? Use a link      Dropbox / Drive / WeTransfer / any URL
-       ▸ Record and Transcribe   folded; press stop and the transcript starts by itself
+```
+⚙  111 TRANSCRIBE  v6      the gear, top left: Settings · Translation · TTS · CRE
+   UPLOAD                    one big target in the middle; any file, ffmpeg decides
+   The picker does not open? Use a link      Dropbox / Drive / WeTransfer / any URL
+   ▸ Record and Transcribe   folded; press stop and the transcript starts by itself
+```
 
 The look is Maha Transcribe's (tokens from `MAHA_TRANSCRIBE_STREAMLIT/ttt/theme.py`): near-black
 ground, one bordered card, one amber accent, warm prose, pills, monospace. Why the upload has no
@@ -75,20 +77,24 @@ a missing secret is a locked door, not an open one with a famous key.
 
 ## Running it on your own machine
 
-    pip install -r requirements.txt
-    streamlit run app.py
+```
+pip install -r requirements.txt
+streamlit run app.py
+```
 
 `packages.txt` and `runtime.txt` are read only by Streamlit Cloud, to install ffmpeg and pick the
 Python version. They do nothing locally — you need ffmpeg on your `PATH` yourself.
 
 ## The files
 
-    app.py                  the interface, the door, the tabs, subtitles and translation
-    transcribe_engine.py    AssemblyAI: the key ring, the pieces, the polling, the verdicts
-    .streamlit/config.toml  the dark theme and the 2000 MB upload cap
-    requirements.txt        four packages
-    packages.txt            apt packages for Streamlit Cloud (ffmpeg)
-    runtime.txt             the Python version for Streamlit Cloud
+```
+app.py                  the interface, the door, the tabs, subtitles and translation
+transcribe_engine.py    AssemblyAI: the key ring, the pieces, the polling, the verdicts
+.streamlit/config.toml  the dark theme and the 2000 MB upload cap
+requirements.txt        four packages
+packages.txt            apt packages for Streamlit Cloud (ffmpeg)
+runtime.txt             the Python version for Streamlit Cloud
+```
 
 ## What was taken out on 21.9.2026
 
