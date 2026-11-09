@@ -1,3 +1,7 @@
+
+
+## From the former README (9.11.2026)
+
 # 111 TRANSCRIBE
 
 Upload audio or video, get a transcript — with speakers, timecodes, subtitles and translation.
